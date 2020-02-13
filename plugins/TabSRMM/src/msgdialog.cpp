@@ -947,9 +947,20 @@ void CMsgDialog::onClick_Quote(CCtrlButton*)
 	if (hDBEvent == 0)
 		return;
 
-	CHARRANGE sel;
-	LOG()->WndProc(EM_EXGETSEL, 0, (LPARAM)&sel);
-	if (sel.cpMin == sel.cpMax) {
+	bool bUseSelection = false;
+	if (m_iLogMode == 0) {
+		CHARRANGE sel;
+		LOG()->WndProc(EM_EXGETSEL, 0, (LPARAM)&sel);
+		if (sel.cpMin != sel.cpMax) {
+			ptrA szFromStream(LOG()->GetRichTextRtf(true, true));
+			ptrW converted(mir_utf8decodeW(szFromStream));
+			Utils::FilterEventMarkers(converted);
+			m_message.SendMsg(EM_SETTEXTEX, (WPARAM)&stx, ptrW(QuoteText(converted)));
+			bUseSelection = true;
+		}
+	}
+
+	if (!bUseSelection) {
 		DBEVENTINFO dbei = {};
 		dbei.cbBlob = db_event_getBlobSize(hDBEvent);
 		wchar_t *szText = (wchar_t*)mir_alloc((dbei.cbBlob + 1) * sizeof(wchar_t));   // URLs are made one char bigger for crlf
@@ -990,12 +1001,6 @@ void CMsgDialog::onClick_Quote(CCtrlButton*)
 		mir_free(szText);
 		if (bNeedsFree)
 			mir_free(szConverted);
-	}
-	else {
-		ptrA szFromStream(LOG()->GetRichTextRtf(true, true));
-		ptrW converted(mir_utf8decodeW(szFromStream));
-		Utils::FilterEventMarkers(converted);
-		m_message.SendMsg(EM_SETTEXTEX, (WPARAM)&stx, ptrW(QuoteText(converted)));
 	}
 
 	SetFocus(m_message.GetHwnd());
@@ -1916,20 +1921,9 @@ LRESULT CMsgDialog::WndProc_Message(UINT msg, WPARAM wParam, LPARAM lParam)
 
 		if (isCtrl && !isAlt) {
 			switch (wParam) {
-			case 0x02:               // bold
-				if (m_SendFormat)
-					m_btnBold.Click();
-				return 0;
-			case 0x09:
-				if (m_SendFormat)
-					m_btnItalic.Click();
-				return 0;
-			case 21:
-				if (m_SendFormat)
-					m_btnUnderline.Click();
-				return 0;
 			case 0x0b:
-				m_message.SetText(L"");
+				if (!isChat())
+					m_message.SetText(L"");
 				return 0;
 			}
 		}
@@ -1977,19 +1971,24 @@ LRESULT CMsgDialog::WndProc_Message(UINT msg, WPARAM wParam, LPARAM lParam)
 		if (wParam == VK_CAPITAL || wParam == VK_NUMLOCK)
 			m_message.OnChange(&m_message);
 
-		// tab-autocomplete
-		if (isChat() && wParam == VK_TAB && !isCtrl && !isShift) {
-			m_message.SendMsg(WM_SETREDRAW, FALSE, 0);
-			bool fCompleted = TabAutoComplete();
-			m_message.SendMsg(WM_SETREDRAW, TRUE, 0);
-			RedrawWindow(m_message.GetHwnd(), nullptr, nullptr, RDW_INVALIDATE);
-			if (!fCompleted && !PluginConfig.m_bAllowTab) {
-				if ((GetSendButtonState(GetHwnd()) != PBS_DISABLED))
-					SetFocus(m_btnOk.GetHwnd());
-				else
-					SetFocus(m_pLog->GetHwnd());
-				return 0;
+		if (isChat()) {
+			// tab-autocomplete
+			if (wParam == VK_TAB && !isCtrl && !isShift) {
+				m_message.SendMsg(WM_SETREDRAW, FALSE, 0);
+				bool fCompleted = TabAutoComplete();
+				m_message.SendMsg(WM_SETREDRAW, TRUE, 0);
+				RedrawWindow(m_message.GetHwnd(), nullptr, nullptr, RDW_INVALIDATE);
+				if (!fCompleted && !PluginConfig.m_bAllowTab) {
+					if ((GetSendButtonState(GetHwnd()) != PBS_DISABLED))
+						SetFocus(m_btnOk.GetHwnd());
+					else
+						SetFocus(m_pLog->GetHwnd());
+					return 0;
+				}
 			}
+
+			if (ProcessHotkeys(wParam, isShift, isCtrl, isAlt))
+				return 0;
 		}
 
 		if (wParam != VK_RIGHT && wParam != VK_LEFT) {

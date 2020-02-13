@@ -120,9 +120,9 @@ void CDiscordProto::CreateChat(CDiscordGuild *pGuild, CDiscordUser *pUser)
 	}
 }
 
-void CDiscordProto::ProcessGuild(const JSONNode &p)
+void CDiscordProto::ProcessGuild(const JSONNode &pRoot)
 {
-	SnowFlake guildId = ::getId(p["id"]);
+	SnowFlake guildId = ::getId(pRoot["id"]);
 
 	CDiscordGuild *pGuild = FindGuild(guildId);
 	if (pGuild == nullptr) {
@@ -130,8 +130,8 @@ void CDiscordProto::ProcessGuild(const JSONNode &p)
 		arGuilds.insert(pGuild);
 	}
 
-	pGuild->ownerId = ::getId(p["owner_id"]);
-	pGuild->wszName = p["name"].as_mstring();
+	pGuild->ownerId = ::getId(pRoot["owner_id"]);
+	pGuild->wszName = pRoot["name"].as_mstring();
 	if (m_bUseGuildGroups)
 		pGuild->groupId = Clist_GroupCreate(Clist_GroupExists(m_wszDefaultGroup), pGuild->wszName);
 
@@ -141,24 +141,74 @@ void CDiscordProto::ProcessGuild(const JSONNode &p)
 	setId(pGuild->hContact, DB_KEY_CHANNELID, guildId);
 
 	if (!pGuild->bSynced && getByte(si->hContact, "EnableSync"))
-		GatewaySendGuildInfo(guildId);
+		LoadGuildInfo(pGuild);
 
 	Chat_Control(m_szModuleName, pGuild->wszName, WINDOW_HIDDEN);
 	Chat_Control(m_szModuleName, pGuild->wszName, SESSION_ONLINE);
 
-	for (auto &it : p["roles"])
+	for (auto &it : pRoot["roles"])
 		ProcessRole(pGuild, it);
 
 	BuildStatusList(pGuild, si);
 
+	// store all guild members
+	for (auto &it : pRoot["members"]) {
+		CMStringW wszUserId = it["user"]["id"].as_mstring();
+		SnowFlake userId = _wtoi64(wszUserId);
+		CDiscordGuildMember *pm = pGuild->FindUser(userId);
+		if (pm == nullptr) {
+			pm = new CDiscordGuildMember(userId);
+			pGuild->arChatUsers.insert(pm);
+		}
+
+		pm->wszNick = it["nick"].as_mstring();
+		if (pm->wszNick.IsEmpty())
+			pm->wszNick = it["user"]["username"].as_mstring() + L"#" + it["user"]["discriminator"].as_mstring();
+
+		if (userId == pGuild->ownerId)
+			pm->wszRole = L"@owner";
+		else {
+			CDiscordRole *pRole = nullptr;
+			for (auto &itr : it["roles"]) {
+				SnowFlake roleId = ::getId(itr);
+				if (pRole = pGuild->arRoles.find((CDiscordRole *)&roleId))
+					break;
+			}
+			pm->wszRole = (pRole == nullptr) ? L"@everyone" : pRole->wszName;
+		}
+		pm->iStatus = ID_STATUS_OFFLINE;
+	}
+
+	// parse online statuses
+	for (auto &it : pRoot["presences"]) {
+		CDiscordGuildMember *gm = pGuild->FindUser(::getId(it["user"]["id"]));
+		if (gm != nullptr)
+			gm->iStatus = StrToStatus(it["status"].as_mstring());
+	}
+
 	for (auto &it : pGuild->arChatUsers)
 		AddGuildUser(pGuild, *it);
 
-	for (auto &it : p["channels"])
+	for (auto &it : pRoot["channels"])
 		ProcessGuildChannel(pGuild, it);
 
 	if (m_bUseGroupchats)
 		ForkThread(&CDiscordProto::BatchChatCreate, pGuild);
+
+	// retrieve missing histories
+	for (auto &it : pGuild->arChannels) {
+		if (it->bIsPrivate)
+			continue;
+
+		if (!it->bSynced) {
+			it->bSynced = true;
+			SnowFlake oldMsgId = getId(it->hContact, DB_KEY_LASTMSGID);
+			if (oldMsgId != 0 && it->lastMsgId > oldMsgId)
+				RetrieveHistory(it, MSG_AFTER, oldMsgId, 99);
+		}
+	}
+
+	pGuild->bSynced = true;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -247,75 +297,40 @@ void CDiscordProto::AddGuildUser(CDiscordGuild *pGuild, const CDiscordGuildMembe
 	wchar_t wszUserId[100];
 	_i64tow_s(pUser.userId, wszUserId, _countof(wszUserId), 10);
 	
-	auto *p = g_chatApi.UM_AddUser(pGuild->pParentSi, wszUserId, pUser.wszNick, (pStatus) ? pStatus->iStatus : 0);
-	p->iStatusEx = flags;
+	auto *pu = g_chatApi.UM_AddUser(pGuild->pParentSi, wszUserId, pUser.wszNick, (pStatus) ? pStatus->iStatus : 0);
+	pu->iStatusEx = flags;
 	if (pUser.userId == m_ownId)
-		pGuild->pParentSi->pMe = p;
+		pGuild->pParentSi->pMe = pu;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void CDiscordProto::ParseGuildContents(CDiscordGuild *pGuild, const JSONNode &pRoot)
+static CMStringW GetCacheFileName(SnowFlake guildId)
 {
-	LIST<CDiscordGuildMember> newMembers(100);
+	VARSW wszCacheDir(L"%miranda_userdata%\\Discord");
+	CreateDirectoryTreeW(wszCacheDir);
 
-	// store all guild members
-	for (auto &it : pRoot["members"]) {
-		CMStringW wszUserId = it["user"]["id"].as_mstring();
-		SnowFlake userId = _wtoi64(wszUserId);
-		CDiscordGuildMember *pm = pGuild->FindUser(userId);
-		if (pm == nullptr) {
-			pm = new CDiscordGuildMember(userId);
-			pGuild->arChatUsers.insert(pm);
-			newMembers.insert(pm);
-		}
+	return CMStringW(FORMAT, L"%s\\%lld.cache", wszCacheDir.get(), guildId);
+}
 
-		pm->wszNick = it["nick"].as_mstring();
-		if (pm->wszNick.IsEmpty())
-			pm->wszNick = it["user"]["username"].as_mstring() + L"#" + it["user"]["discriminator"].as_mstring();
+void CDiscordProto::LoadGuildInfo(CDiscordGuild *pGuild)
+{
+	CMStringW wszCacheFile(GetCacheFileName(pGuild->id));
+	int fileId = _wopen(wszCacheFile, _O_BINARY | _O_RDONLY);
+	if (fileId != -1) {
+		size_t length = _filelength(fileId);
+		ptrA buf((char *)mir_alloc(length+1));
+		_read(fileId, buf, (unsigned)length);
+		_close(fileId);
 
-		if (userId == pGuild->ownerId)
-			pm->wszRole = L"@owner";
-		else {
-			CDiscordRole *pRole = nullptr;
-			for (auto &itr : it["roles"]) {
-				SnowFlake roleId = ::getId(itr);
-				if (pRole = pGuild->arRoles.find((CDiscordRole*)&roleId))
-					break;
-			}
-			pm->wszRole = (pRole == nullptr) ? L"@everyone" : pRole->wszName;
-		}
-		pm->iStatus = ID_STATUS_OFFLINE;
-	}
+		JSONNode root(JSONNode::parse(buf));
+		for (auto &cc : root) {
+			auto *pUser = new CDiscordGuildMember(_wtoi64(cc["id"].as_mstring()));
+			pUser->wszNick = cc["nick"].as_mstring();
+			pUser->wszRole = cc["role"].as_mstring();
+			pGuild->arChatUsers.insert(pUser);
 
-	// parse online statuses
-	for (auto &it : pRoot["presences"]) {
-		CDiscordGuildMember *gm = pGuild->FindUser(::getId(it["user"]["id"]));
-		if (gm != nullptr)
-			gm->iStatus = StrToStatus(it["status"].as_mstring());
-	}
-
-	for (auto &pm : newMembers)
-		AddGuildUser(pGuild, *pm);
-
-	// retrieve missing histories
-	for (auto &it : pGuild->arChannels) {
-		if (it->bIsPrivate)
-			continue;
-
-		if (newMembers.getCount()) {
-			auto *si = g_chatApi.SM_FindSession(it->wszUsername, m_szModuleName);
-			if (si && si->pDlg)
-				si->pDlg->UpdateNickList();
-		}			
-
-		if (!it->bSynced) {
-			it->bSynced = true;
-			SnowFlake oldMsgId = getId(it->hContact, DB_KEY_LASTMSGID);
-			if (oldMsgId != 0 && it->lastMsgId > oldMsgId)
-				RetrieveHistory(it, MSG_AFTER, oldMsgId, 99);
+			AddGuildUser(pGuild, *pUser);
 		}
 	}
-
-	pGuild->bSynced = true;
 }

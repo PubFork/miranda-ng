@@ -319,16 +319,7 @@ int CIcqProto::OnDbEventRead(WPARAM, LPARAM hDbEvent)
 	if (mir_strcmp(szProto, m_szModuleName))
 		return 0;
 
-	if (m_bOnline) {
-		m_impl.m_markRead.Start(200);
-		
-		IcqCacheItem *pCache = FindContactByUIN(GetUserId(hContact));
-		if (pCache) {
-			mir_cslock lck(m_csMarkReadQueue);
-			if (m_arMarkReadQueue.indexOf(pCache) == -1)
-				m_arMarkReadQueue.insert(pCache);
-		}
-	}
+	MarkAsRead(hContact);
 	return 0;
 }
 
@@ -389,6 +380,37 @@ int CIcqProto::AuthRequest(MCONTACT hContact, const wchar_t* szMessage)
 	pReq << AIMSID(this) << WCHAR_PARAM("authorizationMsg", szMessage) << WCHAR_PARAM("buddy", GetUserId(hContact)) << CHAR_PARAM("group", "General") << INT_PARAM("preAuthorized", 1);
 	pReq->hContact = hContact;
 	Push(pReq);
+	return 0;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////
+// File operations
+
+HANDLE CIcqProto::FileAllow(MCONTACT, HANDLE hTransfer, const wchar_t *pwszSavePath)
+{
+	if (!m_bOnline)
+		return nullptr;
+
+	auto *ft = (IcqFileTransfer *)hTransfer;
+	ft->m_wszFileName.Insert(0, pwszSavePath);
+	ft->pfts.szCurrentFile.w = ft->m_wszFileName.GetBuffer();
+
+	auto *pReq = new AsyncHttpRequest(CONN_NONE, REQUEST_GET, ft->m_szHost, &CIcqProto::OnFileRecv);
+	pReq->pUserInfo = ft;
+	pReq->AddHeader("Sec-Fetch-User", "?1");
+	pReq->AddHeader("Sec-Fetch-Site", "cross-site");
+	pReq->AddHeader("Sec-Fetch-Mode", "navigate");
+	Push(pReq);
+	
+	return hTransfer;
+}
+
+int CIcqProto::FileCancel(MCONTACT hContact, HANDLE hTransfer)
+{
+	ProtoBroadcastAck(hContact, ACKTYPE_FILE, ACKRESULT_FAILED, hTransfer, 0);
+
+	auto *ft = (IcqFileTransfer *)hTransfer;
+	delete ft;
 	return 0;
 }
 

@@ -56,6 +56,7 @@ CJabberProto::CJabberProto(const char *aProtoName, const wchar_t *aUserName) :
 	PROTO<CJabberProto>(aProtoName, aUserName),
 	m_impl(*this),
 	m_omemo(this),
+	m_arChatMarks(50, NumericKeySortT),
 	m_lstTransports(50, compareTransports),
 	m_lstRoster(50, compareListItems),
 	m_iqManager(this),
@@ -184,6 +185,7 @@ CJabberProto::CJabberProto(const char *aProtoName, const wchar_t *aUserName) :
 	HookProtoEvent(ME_LANGPACK_CHANGED, &CJabberProto::OnLangChanged);
 	HookProtoEvent(ME_OPT_INITIALISE, &CJabberProto::OnOptionsInit);
 	HookProtoEvent(ME_SKIN_ICONSCHANGED, &CJabberProto::OnReloadIcons);
+	HookProtoEvent(ME_DB_EVENT_MARKED_READ, &CJabberProto::OnDbMarkedRead);
 	HookProtoEvent(ME_DB_CONTACT_SETTINGCHANGED, &CJabberProto::OnDbSettingChanged);
 
 	m_iqManager.FillPermanentHandlers();
@@ -586,7 +588,7 @@ INT_PTR CJabberProto::GetCaps(int type, MCONTACT hContact)
 	case PFLAGNUM_3:
 		return PF2_ONLINE | PF2_SHORTAWAY | PF2_LONGAWAY | PF2_HEAVYDND | PF2_FREECHAT;
 	case PFLAGNUM_4:
-		return PF4_FORCEAUTH | PF4_NOCUSTOMAUTH | PF4_NOAUTHDENYREASON | PF4_SUPPORTTYPING | PF4_AVATARS;
+		return PF4_FORCEAUTH | PF4_NOCUSTOMAUTH | PF4_NOAUTHDENYREASON | PF4_SUPPORTTYPING | PF4_AVATARS | PF4_READNOTIFY;
 	case PFLAG_UNIQUEIDTEXT:
 		return (INT_PTR)Translate("JID");
 	case PFLAG_MAXCONTACTSPERPACKET:
@@ -906,6 +908,18 @@ HANDLE CJabberProto::SendFile(MCONTACT hContact, const wchar_t *szDescription, w
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////
+// receives a message
+
+MEVENT CJabberProto::RecvMsg(MCONTACT hContact, PROTORECVEVENT *pre)
+{
+	MEVENT res = CSuper::RecvMsg(hContact, pre);
+	if (pre->szMsgId)
+		m_arChatMarks.insert(new CChatMark(res, pre->szMsgId, (const char*)pre->lParam));
+	
+	return res;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////
 // JabberSendMessage - sends a message
 
 struct TFakeAckParams
@@ -956,7 +970,7 @@ int CJabberProto::SendMsg(MCONTACT hContact, int unused_unknown, const char *psz
 	int isEncrypted, id = SerialNext();
 	if (!strncmp(pszSrc, PGP_PROLOG, mir_strlen(PGP_PROLOG))) {
 		const char *szEnd = strstr(pszSrc, PGP_EPILOG);
-		char *tempstring = (char*)alloca(mir_strlen(pszSrc) + 2);
+		char *tempstring = (char *)alloca(mir_strlen(pszSrc) + 2);
 		size_t nStrippedLength = mir_strlen(pszSrc) - mir_strlen(PGP_PROLOG) - (szEnd ? mir_strlen(szEnd) : 0) + 1;
 		strncpy_s(tempstring, nStrippedLength, pszSrc + mir_strlen(PGP_PROLOG), _TRUNCATE);
 		tempstring[nStrippedLength] = 0;
@@ -1005,37 +1019,34 @@ int CJabberProto::SendMsg(MCONTACT hContact, int unused_unknown, const char *psz
 
 	m << XATTR("to", szClientJid);
 
+	bool bSendReceipt = (m_bMsgAck || getByte(hContact, "MsgAck", false));
+	if (bSendReceipt) {
+		m << XCHILDNS("request", JABBER_FEAT_MESSAGE_RECEIPTS);
+		m << XCHILDNS("markable", JABBER_FEAT_CHAT_MARKERS);
+	}
+
 	if (
 		// if message delivery check disabled by entity caps manager
 		(jcb & JABBER_CAPS_MESSAGE_EVENTS_NO_DELIVERY) ||
 		// if client knows nothing about delivery
-		!(jcb & (JABBER_CAPS_MESSAGE_EVENTS | JABBER_CAPS_MESSAGE_RECEIPTS)) ||
+		!(jcb & JABBER_CAPS_MESSAGE_RECEIPTS) ||
 		// if message sent to groupchat
 		!mir_strcmp(msgType, "groupchat") ||
 		// if message delivery check disabled in settings
-		!m_bMsgAck || !getByte(hContact, "MsgAck", true))
+		!bSendReceipt)
 	{
-		if (mir_strcmp(msgType, "groupchat")) {
-			id = SerialNext();
+		if (mir_strcmp(msgType, "groupchat"))
 			XmlAddAttrID(m, id);
-		}
+
 		m_ThreadInfo->send(m);
 
 		ForkThread(&CJabberProto::SendMessageAckThread, new TFakeAckParams(hContact, nullptr, id));
 	}
 	else {
 		XmlAddAttrID(m, id);
-
-		// message receipts XEP priority
-		if (jcb & JABBER_CAPS_MESSAGE_RECEIPTS)
-			m << XCHILDNS("request", JABBER_FEAT_MESSAGE_RECEIPTS);
-		else if (jcb & JABBER_CAPS_MESSAGE_EVENTS) {
-			TiXmlElement *x = m << XCHILDNS("x", JABBER_FEAT_MESSAGE_EVENTS);
-			x << XCHILD("delivered"); x << XCHILD("offline");
-		}
-
 		m_ThreadInfo->send(m);
 	}
+
 	return id;
 }
 
@@ -1252,21 +1263,6 @@ int CJabberProto::UserIsTyping(MCONTACT hContact, int type)
 			break;
 		case PROTOTYPE_SELFTYPING_ON:
 			m << XCHILDNS("composing", JABBER_FEAT_CHATSTATES);
-			m_ThreadInfo->send(m);
-			break;
-		}
-	}
-	else if (jcb & JABBER_CAPS_MESSAGE_EVENTS) {
-		TiXmlElement *x = m << XCHILDNS("x", JABBER_FEAT_MESSAGE_EVENTS);
-		if (item->messageEventIdStr != nullptr)
-			x << XCHILD("id", item->messageEventIdStr);
-
-		switch (type) {
-		case PROTOTYPE_SELFTYPING_OFF:
-			m_ThreadInfo->send(m);
-			break;
-		case PROTOTYPE_SELFTYPING_ON:
-			x << XCHILD("composing");
 			m_ThreadInfo->send(m);
 			break;
 		}
