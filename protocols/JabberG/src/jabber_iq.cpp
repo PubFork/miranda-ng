@@ -75,7 +75,7 @@ void CJabberIqManager::Shutdown()
 	if (m_bExpirerThreadShutdownRequest || !m_hExpirerThread)
 		return;
 
-	m_bExpirerThreadShutdownRequest = TRUE;
+	m_bExpirerThreadShutdownRequest = true;
 
 	WaitForSingleObject(m_hExpirerThread, INFINITE);
 	CloseHandle(m_hExpirerThread);
@@ -128,6 +128,9 @@ void CJabberIqManager::FillPermanentHandlers()
 
 	// http auth (XEP-0070)
 	AddPermanentHandler(&CJabberProto::OnIqHttpAuth, JABBER_IQ_TYPE_GET, JABBER_IQ_PARSE_FROM | JABBER_IQ_PARSE_ID_STR | JABBER_IQ_PARSE_CHILD_TAG_NODE, JABBER_FEAT_HTTP_AUTH, FALSE, "confirm");
+
+	// XEP-0231 support
+	AddPermanentHandler(&CJabberProto::FtHandleCidRequest, JABBER_IQ_TYPE_GET, JABBER_IQ_PARSE_FROM | JABBER_IQ_PARSE_TO | JABBER_IQ_PARSE_ID_STR | JABBER_IQ_PARSE_CHILD_TAG_NODE, JABBER_FEAT_BITS, FALSE, "data");
 }
 
 void __cdecl CJabberProto::ExpirerThread(void* pParam)

@@ -741,7 +741,7 @@ class CDlgOptAdvanced : public CJabberDlgBase
 	CCtrlEdit		m_txtDirect;
 	CCtrlTreeOpts	m_otvOptions;
 
-	BYTE m_oldFrameValue;
+	bool m_oldFrameValue;
 
 public:
 	CDlgOptAdvanced(CJabberProto *proto) :
@@ -768,6 +768,7 @@ public:
 		m_otvOptions.AddOption(LPGENW("Messaging") L"/" LPGENW("Enable user activity receiving"), m_proto->m_bEnableUserActivity);
 		m_otvOptions.AddOption(LPGENW("Messaging") L"/" LPGENW("Receive notes"), m_proto->m_bAcceptNotes);
 		m_otvOptions.AddOption(LPGENW("Messaging") L"/" LPGENW("Automatically save received notes"), m_proto->m_bAutosaveNotes);
+		m_otvOptions.AddOption(LPGENW("Messaging") L"/" LPGENW("Inline pictures in messages (XEP-0231)"), m_proto->m_bInlinePictures);
 		m_otvOptions.AddOption(LPGENW("Messaging") L"/" LPGENW("Enable server-side history (XEP-0136)"), m_proto->m_bEnableMsgArchive);
 		m_otvOptions.AddOption(LPGENW("Messaging") L"/" LPGENW("Receive conversations from other devices (XEP-0280)"), m_proto->m_bEnableCarbons);
 		m_otvOptions.AddOption(LPGENW("Messaging") L"/" LPGENW("Use Stream Management (XEP-0198) if possible (Testing)"), m_proto->m_bEnableStreamMgmt);
@@ -878,7 +879,7 @@ public:
 		m_otvOptions.AddOption(LPGENW("General") L"/" LPGENW("Autoaccept multiuser chat invitations"),   m_proto->m_bAutoAcceptMUC);
 		m_otvOptions.AddOption(LPGENW("General") L"/" LPGENW("Automatically join bookmarks on login"),   m_proto->m_bAutoJoinBookmarks);
 		m_otvOptions.AddOption(LPGENW("General") L"/" LPGENW("Automatically join conferences on login"), m_proto->m_bAutoJoinConferences);
-		m_otvOptions.AddOption(LPGENW("General") L"/" LPGENW("Do not open chat windows on creation"),      m_proto->m_bAutoJoinHidden);
+		m_otvOptions.AddOption(LPGENW("General") L"/" LPGENW("Do not open chat windows on creation"),    m_proto->m_bAutoJoinHidden);
 		m_otvOptions.AddOption(LPGENW("General") L"/" LPGENW("Do not show multiuser chat invitations"),  m_proto->m_bIgnoreMUCInvites);
 		m_otvOptions.AddOption(LPGENW("Log events") L"/" LPGENW("Ban notifications"),                    m_proto->m_bGcLogBans);
 		m_otvOptions.AddOption(LPGENW("Log events") L"/" LPGENW("Room configuration changes"),           m_proto->m_bGcLogConfig);
@@ -1110,13 +1111,13 @@ protected:
 		// clear saved password
 		m_proto->m_savedPassword = nullptr;
 
-		BOOL bUseHostnameAsResource = FALSE;
+		bool bUseHostnameAsResource = false;
 		wchar_t szCompName[MAX_COMPUTERNAME_LENGTH + 1], szResource[MAX_COMPUTERNAME_LENGTH + 1];
 		DWORD dwCompNameLength = MAX_COMPUTERNAME_LENGTH;
 		if (GetComputerName(szCompName, &dwCompNameLength)) {
 			m_cbResource.GetText(szResource, _countof(szResource));
 			if (!mir_wstrcmp(szCompName, szResource))
-				bUseHostnameAsResource = TRUE;
+				bUseHostnameAsResource = true;
 		}
 		m_proto->m_bHostNameAsResource = bUseHostnameAsResource;
 
@@ -1129,7 +1130,7 @@ protected:
 
 		switch (m_cbType.GetItemData(m_cbType.GetCurSel())) {
 		case ACC_PUBLIC:
-			m_proto->m_bUseSSL = m_proto->m_bUseTLS = FALSE;
+			m_proto->m_bUseSSL = m_proto->m_bUseTLS = false;
 			break;
 
 		case ACC_GTALK:
@@ -1137,27 +1138,27 @@ protected:
 			{
 				int port = m_txtPort.GetInt();
 				if (port == 443 || port == 5223) {
-					m_proto->m_bUseSSL = TRUE;
-					m_proto->m_bUseTLS = FALSE;
+					m_proto->m_bUseSSL = true;
+					m_proto->m_bUseTLS = false;
 				}
 				else if (port == 5222) {
-					m_proto->m_bUseSSL = FALSE;
-					m_proto->m_bUseTLS = TRUE;
+					m_proto->m_bUseSSL = false;
+					m_proto->m_bUseTLS = true;
 				}
 			}
 			break;
 
 		case ACC_OK:
-			m_proto->m_bIgnoreRosterGroups = TRUE;
-			m_proto->m_bUseSSL = FALSE;
-			m_proto->m_bUseTLS = TRUE;
+			m_proto->m_bIgnoreRosterGroups = true;
+			m_proto->m_bUseSSL = false;
+			m_proto->m_bUseTLS = true;
 
 		case ACC_TLS:
 		case ACC_HIPCHAT:
 		case ACC_LJTALK:
 		case ACC_SMS:
-			m_proto->m_bUseSSL = FALSE;
-			m_proto->m_bUseTLS = TRUE;
+			m_proto->m_bUseSSL = false;
+			m_proto->m_bUseTLS = true;
 			break;
 
 		case ACC_LOL_EN:
@@ -1165,13 +1166,13 @@ protected:
 		case ACC_LOL_OC:
 		case ACC_LOL_US:
 			m_proto->setDword("Priority", -2);
-			m_proto->m_bUseSSL = TRUE;
-			m_proto->m_bUseTLS = FALSE;
+			m_proto->m_bUseSSL = true;
+			m_proto->m_bUseTLS = false;
 			break;
 
 		case ACC_SSL:
-			m_proto->m_bUseSSL = TRUE;
-			m_proto->m_bUseTLS = FALSE;
+			m_proto->m_bUseSSL = true;
+			m_proto->m_bUseTLS = false;
 			break;
 		}
 
@@ -1182,13 +1183,13 @@ protected:
 		m_txtManualHost.GetTextA(manualServer, _countof(manualServer));
 
 		if ((m_chkManualHost.GetState() == BST_CHECKED) && mir_strcmp(server, manualServer)) {
-			m_proto->m_bManualConnect = TRUE;
+			m_proto->m_bManualConnect = true;
 			m_proto->setString("ManualHost", manualServer);
 			m_proto->setWord("ManualPort", m_txtPort.GetInt());
 			m_proto->setWord("Port", m_txtPort.GetInt());
 		}
 		else {
-			m_proto->m_bManualConnect = FALSE;
+			m_proto->m_bManualConnect = false;
 			m_proto->delSetting("ManualHost");
 			m_proto->delSetting("ManualPort");
 			m_proto->setWord("Port", m_txtPort.GetInt());

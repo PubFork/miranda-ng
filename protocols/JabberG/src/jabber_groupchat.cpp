@@ -165,14 +165,14 @@ struct JabberGcRecentInfo
 	}
 
 private:
-	BOOL null_strequals(const char *str1, const char *str2)
+	bool null_strequals(const char *str1, const char *str2)
 	{
-		if (!str1 && !str2) return TRUE;
-		if (!str1 && str2 && !*str2) return TRUE;
-		if (!str2 && str1 && !*str1) return TRUE;
+		if (!str1 && !str2) return true;
+		if (!str1 && str2 && !*str2) return true;
+		if (!str2 && str1 && !*str1) return true;
 
-		if (!str1 && str2) return FALSE;
-		if (!str2 && str1) return FALSE;
+		if (!str1 && str2) return false;
+		if (!str2 && str1) return false;
 
 		return !mir_strcmp(str1, str2);
 	}
@@ -1122,16 +1122,13 @@ void CJabberProto::GroupchatProcessMessage(const TiXmlElement *node)
 class CGroupchatInviteAcceptDlg : public CJabberDlgBase
 {
 	typedef CJabberDlgBase CSuper;
-	CCtrlButton m_accept;
 	CMStringA m_roomJid, m_from, m_reason, m_password;
 
 public:
 	CGroupchatInviteAcceptDlg(CJabberProto *ppro, const char *roomJid, const char *from, const char *reason, const char *password) :
 		CSuper(ppro, IDD_GROUPCHAT_INVITE_ACCEPT),
-		m_roomJid(roomJid), m_from(from), m_reason(reason), m_password(password),
-		m_accept(this, IDC_ACCEPT)
+		m_roomJid(roomJid), m_from(from), m_reason(reason), m_password(password)
 	{
-		m_accept.OnClick = Callback(this, &CGroupchatInviteAcceptDlg::OnCommand_Accept);
 	}
 
 	bool OnInitDialog() override
@@ -1152,12 +1149,12 @@ public:
 		return true;
 	}
 
-	void OnCommand_Accept(CCtrlButton*)
+	bool OnApply() override
 	{
 		wchar_t text[128];
 		GetDlgItemText(m_hwnd, IDC_NICK, text, _countof(text));
 		m_proto->AcceptGroupchatInvite(m_roomJid, T2Utf(text), m_password);
-		EndDialog(m_hwnd, 0);
+		return true;
 	}
 };
 

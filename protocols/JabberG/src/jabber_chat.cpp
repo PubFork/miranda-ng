@@ -63,14 +63,14 @@ struct TRoleOrAffiliationInfo
 
 	wchar_t *title;
 
-	BOOL check(JABBER_RESOURCE_STATUS *me, JABBER_RESOURCE_STATUS *him)
+	bool check(JABBER_RESOURCE_STATUS *me, JABBER_RESOURCE_STATUS *him)
 	{
-		if (me->m_affiliation == AFFILIATION_OWNER) return TRUE;
-		if (me == him) return FALSE;
-		if (me->m_affiliation <= him->m_affiliation) return FALSE;
-		if (me->m_role < min_role) return FALSE;
-		if (me->m_affiliation < min_affiliation) return FALSE;
-		return TRUE;
+		if (me->m_affiliation == AFFILIATION_OWNER) return true;
+		if (me == him) return false;
+		if (me->m_affiliation <= him->m_affiliation) return false;
+		if (me->m_role < min_role) return false;
+		if (me->m_affiliation < min_affiliation) return false;
+		return true;
 	}
 	
 	void translate()
@@ -1368,7 +1368,7 @@ int CJabberProto::JabberGcEventHook(WPARAM, LPARAM lParam)
 	T2Utf roomJid(gch->si->ptszID);
 	JABBER_LIST_ITEM *item = ListGetItemPtr(LIST_CHATROOM, roomJid);
 	if (item == nullptr)
-		return 0;
+		return 1;
 
 	switch (gch->iType) {
 	case GC_USER_MESSAGE:
@@ -1408,7 +1408,7 @@ int CJabberProto::JabberGcEventHook(WPARAM, LPARAM lParam)
 		break;
 	}
 
-	return 0;
+	return 1;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

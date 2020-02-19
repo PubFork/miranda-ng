@@ -46,16 +46,6 @@ static ThreadData *g_pRegInfo;  // pointer to registration thread
 int iqIdRegGetReg;
 int iqIdRegSetReg;
 
-// XML Console
-#define JCPF_IN      0x01UL
-#define JCPF_OUT     0x02UL
-#define JCPF_ERROR   0x04UL
-
-static VOID CALLBACK JabberDummyApcFunc(DWORD_PTR)
-{
-	return;
-}
-
 struct JabberPasswordDlgParam
 {
 	CJabberProto *pro;
@@ -100,10 +90,11 @@ static INT_PTR CALLBACK JabberPasswordDlgProc(HWND hwndDlg, UINT msg, WPARAM wPa
 				param->pro->setByte("SavePassword", savePassword);
 				if (savePassword) {
 					param->pro->setWString("Password", param->onlinePassword);
-					param->saveOnlinePassword = TRUE;
+					param->saveOnlinePassword = true;
 				}
 			}
-			// Fall through
+			__fallthrough;
+
 		case IDCANCEL:
 			param->dlgResult = LOWORD(wParam);
 			SetEvent(param->hEventPasswdDlg);
@@ -116,7 +107,7 @@ static INT_PTR CALLBACK JabberPasswordDlgProc(HWND hwndDlg, UINT msg, WPARAM wPa
 	return FALSE;
 }
 
-static VOID CALLBACK JabberPasswordCreateDialogApcProc(void* param)
+static VOID CALLBACK JabberPasswordCreateDialogApcProc(void *param)
 {
 	CreateDialogParam(g_plugin.getInst(), MAKEINTRESOURCE(IDD_PASSWORD), nullptr, JabberPasswordDlgProc, (LPARAM)param);
 }
@@ -701,7 +692,7 @@ void CJabberProto::OnProcessFeatures(const TiXmlElement *node, ThreadData *info)
 		if (!mir_strcmp(pszName, "compression") && m_bEnableZlib == TRUE) {
 			debugLogA("Server compression available");
 			for (auto *c : TiXmlFilter(n, "method")) {
-				if (!mir_strcmp(c->GetText(), "zlib") && info->zlibInit() == TRUE) {
+				if (!mir_strcmp(c->GetText(), "zlib") && info->zlibInit()) {
 					debugLogA("Requesting Zlib compression");
 					info->send(XmlNode("compress") << XATTR("xmlns", "http://jabber.org/protocol/compress")
 						<< XCHILD("method", "zlib"));
@@ -767,7 +758,7 @@ void CJabberProto::OnProcessFeatures(const TiXmlElement *node, ThreadData *info)
 				<< XCHILD("resource", info->resource));
 
 			if (m_AuthMechs.isSessionAvailable)
-				info->bIsSessionAvailable = TRUE;
+				info->bIsSessionAvailable = true;
 
 			return;
 		}
@@ -949,7 +940,7 @@ void CJabberProto::OnProcessCompressed(const TiXmlElement *node, ThreadData *inf
 
 	debugLogA("Starting Zlib stream compression...");
 
-	info->useZlib = TRUE;
+	info->useZlib = true;
 	info->zRecvData = (char*)mir_alloc(ZLIB_CHUNK_SIZE);
 
 	xmlStreamInitialize("after successful Zlib init");
@@ -1180,11 +1171,6 @@ void CJabberProto::OnProcessMessage(const TiXmlElement *node, ThreadData *info)
 		item = ListGetItemPtr(LIST_VCARD_TEMP, from);
 
 	time_t msgTime = 0;
-	bool isChatRoomInvitation = false;
-	const char *inviteRoomJid = nullptr;
-	const char *inviteFromJid = nullptr;
-	const char *inviteReason = nullptr;
-	const char *invitePassword = nullptr;
 
 	// check chatstates availability
 	if (pFromResource && XmlGetChildByTag(node, "active", "xmlns", JABBER_FEAT_CHATSTATES))
@@ -1211,7 +1197,7 @@ void CJabberProto::OnProcessMessage(const TiXmlElement *node, ThreadData *info)
 		if (nPacketId == -1)
 			nPacketId = JabberGetPacketID(node);
 		if (nPacketId != -1)
-			ProtoBroadcastAck(hContact, ACKTYPE_MESSAGE, ACKRESULT_SUCCESS, (HANDLE)nPacketId, 0);
+			ProtoBroadcastAck(hContact, ACKTYPE_MESSAGE, ACKRESULT_SUCCESS, (HANDLE)nPacketId);
 	}
 
 	if (auto *n = XmlGetChildByTag(node, "displayed", "xmlns", JABBER_FEAT_CHAT_MARKERS))
@@ -1330,13 +1316,12 @@ void CJabberProto::OnProcessMessage(const TiXmlElement *node, ThreadData *info)
 		else if (!mir_strcmp(pszXmlns, JABBER_FEAT_MUC_USER)) {
 			auto *inviteNode = XmlFirstChild(xNode, "invite");
 			if (inviteNode != nullptr) {
-				inviteFromJid = XmlGetAttr(inviteNode, "from");
-				inviteReason = XmlGetChildText(inviteNode, "reason");
-				inviteRoomJid = from;
+				auto *inviteReason = XmlGetChildText(inviteNode, "reason");
 				if (inviteReason == nullptr)
 					inviteReason = szMessage;
-				isChatRoomInvitation = true;
-				invitePassword = XmlGetChildText(xNode, "password");
+				if (!m_bIgnoreMUCInvites)
+					GroupchatProcessInvite(from, XmlGetAttr(inviteNode, "from"), inviteReason, XmlGetChildText(xNode, "password"));
+				return;
 			}
 		}
 		else if (!mir_strcmp(pszXmlns, JABBER_FEAT_ROSTER_EXCHANGE) && item != nullptr && (item->subscription == SUB_BOTH || item->subscription == SUB_TO)) {
@@ -1361,35 +1346,14 @@ void CJabberProto::OnProcessMessage(const TiXmlElement *node, ThreadData *info)
 				}
 			}
 		}
-		else if (!isChatRoomInvitation && !mir_strcmp(pszXmlns, JABBER_FEAT_DIRECT_MUC_INVITE)) {
-			inviteRoomJid = XmlGetAttr(xNode, "jid");
-			inviteFromJid = from;
-			if (inviteReason == nullptr)
-				inviteReason = xNode->GetText();
+		else if (!mir_strcmp(pszXmlns, JABBER_FEAT_DIRECT_MUC_INVITE)) {
+			auto *inviteReason = xNode->GetText();
 			if (!inviteReason)
 				inviteReason = szMessage;
-			isChatRoomInvitation = true;
+			if (!m_bIgnoreMUCInvites)
+				GroupchatProcessInvite(from, XmlGetAttr(xNode, "jid"), inviteReason, nullptr);
+			return;
 		}
-	}
-
-	if (isChatRoomInvitation) {
-		if (inviteRoomJid != nullptr) {
-			if (m_bIgnoreMUCInvites) {
-				// FIXME: temporary disabled due to MUC inconsistence on server side
-				/*
-				XmlNode m("message"); XmlAddAttr(m, "to", from);
-				XmlNode xNode = XmlAddChild(m, "x");
-				XmlAddAttr(xNode, "xmlns", JABBER_FEAT_MUC_USER);
-				XmlNode declineNode = XmlAddChild(xNode, "decline");
-				XmlAddAttr(declineNode, "from", inviteRoomJid);
-				XmlNode reasonNode = XmlAddChild(declineNode, "reason", "The user has chosen to not accept chat invites");
-				info->send(m);
-				*/
-			}
-			else GroupchatProcessInvite(inviteRoomJid, inviteFromJid, inviteReason, invitePassword);
-		}
-		debugLogA("chat room invitation processed, returning");
-		return;
 	}
 
 	// all service info was already processed
@@ -1403,7 +1367,7 @@ void CJabberProto::OnProcessMessage(const TiXmlElement *node, ThreadData *info)
 
 	if (item != nullptr) {
 		if (pFromResource) {
-			pFromResource->m_bMessageSessionActive = TRUE;
+			pFromResource->m_bMessageSessionActive = true;
 
 			JABBER_RESOURCE_STATUS *pLast = item->m_pLastSeenResource;
 			item->m_pLastSeenResource = pFromResource;
@@ -1670,7 +1634,7 @@ void CJabberProto::OnProcessPresence(const TiXmlElement *node, ThreadData *info)
 			if (!bHasAvatar && bRemovedAvatar) {
 				debugLogA("Has no avatar");
 				if (!delSetting(hContact, "AvatarHash"))
-					ProtoBroadcastAck(hContact, ACKTYPE_AVATAR, ACKRESULT_SUCCESS, nullptr, 0);
+					ProtoBroadcastAck(hContact, ACKTYPE_AVATAR, ACKRESULT_SUCCESS, nullptr);
 			}
 		}
 		return;
@@ -1775,13 +1739,15 @@ void CJabberProto::OnProcessPresence(const TiXmlElement *node, ThreadData *info)
 	}
 }
 
-BOOL CJabberProto::OnProcessJingle(const TiXmlElement *node)
+bool CJabberProto::OnProcessJingle(const TiXmlElement *node)
 {
 	const char *type;
 	auto *child = XmlGetChildByTag(node, "jingle", "xmlns", JABBER_FEAT_JINGLE);
 
 	if (child) {
-		if ((type = XmlGetAttr(node, "type")) == nullptr) return FALSE;
+		if ((type = XmlGetAttr(node, "type")) == nullptr)
+			return false;
+
 		if ((!mir_strcmp(type, "get") || !mir_strcmp(type, "set"))) {
 			const char *szAction = XmlGetAttr(child, "action");
 			const char *idStr = XmlGetAttr(node, "id");
@@ -1804,7 +1770,7 @@ BOOL CJabberProto::OnProcessJingle(const TiXmlElement *node)
 				jingleNode << XCHILD("reason")
 					<< XCHILD("unsupported-applications");
 				m_ThreadInfo->send(iq);
-				return TRUE;
+				return true;
 			}
 			else {
 				// if it's something else than 'session-initiate' and noone processed it yet, reply with "unknown-session"
@@ -1814,19 +1780,21 @@ BOOL CJabberProto::OnProcessJingle(const TiXmlElement *node)
 				errNode << XCHILDNS("item-not-found", "urn:ietf:params:xml:ns:xmpp-stanzas");
 				errNode << XCHILDNS("unknown-session", "urn:xmpp:jingle:errors:1");
 				m_ThreadInfo->send(iq);
-				return TRUE;
+				return true;
 			}
 		}
 	}
-	return FALSE;
+	return false;
 }
 
 void CJabberProto::OnProcessIq(const TiXmlElement *node)
 {
-	if (!node->Name() || mir_strcmp(node->Name(), "iq")) return;
+	if (!node->Name() || mir_strcmp(node->Name(), "iq"))
+		return;
 
 	const char *type;
-	if ((type = XmlGetAttr(node, "type")) == nullptr) return;
+	if ((type = XmlGetAttr(node, "type")) == nullptr)
+		return;
 
 	int id = JabberGetPacketID(node);
 
@@ -1941,12 +1909,12 @@ void CJabberProto::OnProcessRegIq(const TiXmlElement *node, ThreadData *info)
 		else if (id == iqIdRegSetReg) {
 			info->send("</stream:stream>");
 			SendMessage(info->conn.reg_hwndDlg, WM_JABBER_REGDLG_UPDATE, 100, (LPARAM)TranslateT("Registration successful"));
-			info->reg_done = TRUE;
+			info->reg_done = true;
 		}
 	}
 	else if (!mir_strcmp(type, "error")) {
 		SendMessage(info->conn.reg_hwndDlg, WM_JABBER_REGDLG_UPDATE, 100, (LPARAM)JabberErrorMsg(node).c_str());
-		info->reg_done = TRUE;
+		info->reg_done = true;
 		info->send("</stream:stream>");
 	}
 }

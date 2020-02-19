@@ -44,7 +44,7 @@ void CJabberProto::FtCancel(filetransfer *ft)
 		if (item->ft == ft) {
 			debugLogA("Canceling file receiving session while in si negotiation");
 			ListRemoveByIndex(i);
-			ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ACKRESULT_FAILED, ft, 0);
+			ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ACKRESULT_FAILED, ft);
 			delete ft;
 			return;
 		}
@@ -75,12 +75,21 @@ void CJabberProto::FtCancel(filetransfer *ft)
 
 ///////////////// File sending using stream initiation /////////////////////////
 
+static void __cdecl FakeAckThread(void *param)
+{
+	Sleep(100);
+
+	auto *ft = (filetransfer *)param;
+	ft->complete();
+	delete ft;
+}
+
 void CJabberProto::FtInitiate(const char* jid, filetransfer *ft)
 {
 	char *rs = ListGetBestClientResourceNamePtr(jid);
 	if (ft == nullptr || !m_bJabberOnline || rs == nullptr) {
 		if (ft) {
-			ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ACKRESULT_FAILED, ft, 0);
+			ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ACKRESULT_FAILED, ft);
 			delete ft;
 		}
 		return;
@@ -89,6 +98,14 @@ void CJabberProto::FtInitiate(const char* jid, filetransfer *ft)
 	wchar_t *filename = ft->std.pszFiles.w[ft->std.currentFileNumber];
 	if (wchar_t *p = wcsrchr(filename, '\\'))
 		filename = p + 1;
+
+	// if we enabled XEP-0231, try to inline a picture
+	if (m_bInlinePictures && ProtoGetAvatarFileFormat(ft->std.szCurrentFile.w)) {
+		if (FtTryInlineFile(ft->std.hContact, ft->std.szCurrentFile.w)) {
+			mir_forkthread(FakeAckThread, ft);
+			return;
+		}
+	}
 
 	// if we use XEP-0363, send a slot allocation request
 	if (m_bUseHttpUpload) {
@@ -203,36 +220,34 @@ void CJabberProto::OnFtSiResult(const TiXmlElement *iqNode, CJabberIqInfo *pInfo
 	}
 	else {
 		debugLogA("File transfer stream initiation request denied or failed");
-		ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, pInfo->GetIqType() == JABBER_IQ_TYPE_ERROR ? ACKRESULT_DENIED : ACKRESULT_FAILED, ft, 0);
+		ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, pInfo->GetIqType() == JABBER_IQ_TYPE_ERROR ? ACKRESULT_DENIED : ACKRESULT_FAILED, ft);
 		delete ft;
 	}
 }
 
-BOOL CJabberProto::FtSend(HNETLIBCONN hConn, filetransfer *ft)
+bool CJabberProto::FtSend(HNETLIBCONN hConn, filetransfer *ft)
 {
-	int fd;
-	char* buffer;
-	int numRead;
-
 	debugLogW(L"Sending [%s]", ft->std.pszFiles.w[ft->std.currentFileNumber]);
 
 	struct _stat64 statbuf;
 	_wstat64(ft->std.pszFiles.w[ft->std.currentFileNumber], &statbuf);	// file size in statbuf.st_size
-	if ((fd = _wopen(ft->std.pszFiles.w[ft->std.currentFileNumber], _O_BINARY | _O_RDONLY)) < 0) {
+	int fd = _wopen(ft->std.pszFiles.w[ft->std.currentFileNumber], _O_BINARY | _O_RDONLY);
+	if (fd < 0) {
 		debugLogA("File cannot be opened");
-		return FALSE;
+		return false;
 	}
 
 	ft->std.flags |= PFTS_SENDING;
 	ft->std.currentFileSize = statbuf.st_size;
 	ft->std.currentFileProgress = 0;
 
-	if ((buffer = (char*)mir_alloc(2048)) != nullptr) {
+	if (char *buffer = (char *)mir_alloc(2048)) {
+		int numRead;
 		while ((numRead = _read(fd, buffer, 2048)) > 0) {
 			if (Netlib_Send(hConn, buffer, numRead, 0) != numRead) {
 				mir_free(buffer);
 				_close(fd);
-				return FALSE;
+				return false;
 			}
 			ft->std.currentFileProgress += numRead;
 			ft->std.totalProgress += numRead;
@@ -241,10 +256,10 @@ BOOL CJabberProto::FtSend(HNETLIBCONN hConn, filetransfer *ft)
 		mir_free(buffer);
 	}
 	_close(fd);
-	return TRUE;
+	return true;
 }
 
-BOOL CJabberProto::FtIbbSend(int blocksize, filetransfer *ft)
+bool CJabberProto::FtIbbSend(int blocksize, filetransfer *ft)
 {
 	debugLogW(L"Sending [%s]", ft->std.pszFiles.w[ft->std.currentFileNumber]);
 
@@ -254,7 +269,7 @@ BOOL CJabberProto::FtIbbSend(int blocksize, filetransfer *ft)
 	int fd = _wopen(ft->std.pszFiles.w[ft->std.currentFileNumber], _O_BINARY | _O_RDONLY);
 	if (fd < 0) {
 		debugLogA("File cannot be opened");
-		return FALSE;
+		return false;
 	}
 
 	ft->std.flags |= PFTS_SENDING;
@@ -286,7 +301,7 @@ BOOL CJabberProto::FtIbbSend(int blocksize, filetransfer *ft)
 			if (ft->jibb->state == JIBB_ERROR || ft->jibb->bStreamClosed || m_ThreadInfo->send(msg) == SOCKET_ERROR) {
 				debugLogA("JabberFtIbbSend unsuccessful exit");
 				_close(fd);
-				return FALSE;
+				return false;
 			}
 
 			ft->jibb->dwTransferredSize += (DWORD)numRead;
@@ -297,25 +312,25 @@ BOOL CJabberProto::FtIbbSend(int blocksize, filetransfer *ft)
 		}
 	}
 	_close(fd);
-	return TRUE;
+	return true;
 }
 
 void CJabberProto::FtSendFinal(BOOL success, filetransfer *ft)
 {
 	if (!success) {
 		debugLogA("File transfer complete with error");
-		ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ft->state == FT_DENIED ? ACKRESULT_DENIED : ACKRESULT_FAILED, ft, 0);
+		ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ft->state == FT_DENIED ? ACKRESULT_DENIED : ACKRESULT_FAILED, ft);
 	}
 	else {
 		if (ft->std.currentFileNumber < ft->std.totalFiles - 1) {
 			ft->std.currentFileNumber++;
 			replaceStrW(ft->std.szCurrentFile.w, ft->std.pszFiles.w[ft->std.currentFileNumber]);
-			ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ACKRESULT_NEXTFILE, ft, 0);
+			ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ACKRESULT_NEXTFILE, ft);
 			FtInitiate(ft->jid, ft);
 			return;
 		}
 
-		ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ACKRESULT_SUCCESS, ft, 0);
+		ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ACKRESULT_SUCCESS, ft);
 	}
 
 	delete ft;
@@ -439,14 +454,13 @@ void CJabberProto::FtAcceptIbbRequest(filetransfer *ft)
 	}
 }
 
-BOOL CJabberProto::FtHandleBytestreamRequest(const TiXmlElement *iqNode, CJabberIqInfo *pInfo)
+bool CJabberProto::FtHandleBytestreamRequest(const TiXmlElement *iqNode, CJabberIqInfo *pInfo)
 {
 	auto *queryNode = pInfo->GetChildNode();
 
 	const char *sid = XmlGetAttr(queryNode, "sid");
 	JABBER_LIST_ITEM *item = ListGetItemPtr(LIST_FTRECV, sid);
-
-	if ((sid ) != nullptr && (item ) != nullptr) {
+	if (sid && item) {
 		// Start Bytestream session
 		JABBER_BYTE_TRANSFER *jbt = new JABBER_BYTE_TRANSFER;
 		jbt->iqNode = iqNode->DeepClone(&jbt->doc)->ToElement();
@@ -456,27 +470,31 @@ BOOL CJabberProto::FtHandleBytestreamRequest(const TiXmlElement *iqNode, CJabber
 		item->ft->jbt = jbt;
 		ForkThread((MyThreadFunc)&CJabberProto::ByteReceiveThread, jbt);
 		ListRemove(LIST_FTRECV, sid);
-		return TRUE;
+		return true;
 	}
 
 	debugLogA("File transfer invalid bytestream initiation request received");
-	return TRUE;
+	return true;
 }
 
-BOOL CJabberProto::FtHandleIbbRequest(const TiXmlElement *iqNode, BOOL bOpen)
+bool CJabberProto::FtHandleIbbRequest(const TiXmlElement *iqNode, bool bOpen)
 {
-	if (iqNode == nullptr) return FALSE;
+	if (iqNode == nullptr)
+		return false;
 
 	const char *id = XmlGetAttr(iqNode, "id");
 	const char *from = XmlGetAttr(iqNode, "from");
 	const char *to = XmlGetAttr(iqNode, "to");
-	if (!id || !from || !to) return FALSE;
+	if (!id || !from || !to)
+		return false;
 
 	auto *ibbNode = XmlGetChildByTag(iqNode, bOpen ? "open" : "close", "xmlns", JABBER_FEAT_IBB);
-	if (!ibbNode) return FALSE;
+	if (!ibbNode)
+		return false;
 
 	const char *sid = XmlGetAttr(ibbNode, "sid");
-	if (!sid) return FALSE;
+	if (!sid)
+		return false;
 
 	// already closed?
 	JABBER_LIST_ITEM *item = ListGetItemPtr(LIST_FTRECV, sid);
@@ -485,7 +503,7 @@ BOOL CJabberProto::FtHandleIbbRequest(const TiXmlElement *iqNode, BOOL bOpen)
 			XmlNodeIq("error", id, from)
 			<< XCHILD("error") << XATTRI("code", 404) << XATTR("type", "cancel")
 			<< XCHILDNS("item-not-found", "urn:ietf:params:xml:ns:xmpp-stanzas"));
-		return FALSE;
+		return false;
 	}
 
 	// open event
@@ -504,28 +522,27 @@ BOOL CJabberProto::FtHandleIbbRequest(const TiXmlElement *iqNode, BOOL bOpen)
 			ForkThread((MyThreadFunc)&CJabberProto::IbbReceiveThread, jibb);
 
 			m_ThreadInfo->send(XmlNodeIq("result", id, from));
-			return TRUE;
+			return true;
 		}
 		// stream already open
 		m_ThreadInfo->send(
 			XmlNodeIq("error", id, from)
 			<< XCHILD("error") << XATTRI("code", 404) << XATTR("type", "cancel")
 			<< XCHILDNS("item-not-found", "urn:ietf:params:xml:ns:xmpp-stanzas"));
-		return FALSE;
+		return false;
 	}
 
 	// close event && stream already open
 	if (item->jibb && item->jibb->hEvent) {
-		item->jibb->bStreamClosed = TRUE;
+		item->jibb->bStreamClosed = true;
 		SetEvent(item->jibb->hEvent);
 
 		m_ThreadInfo->send(XmlNodeIq("result", id, from));
-		return TRUE;
+		return true;
 	}
 
 	ListRemove(LIST_FTRECV, sid);
-
-	return FALSE;
+	return false;
 }
 
 int CJabberProto::FtReceive(HNETLIBCONN, filetransfer *ft, char* buffer, int datalen)
@@ -561,6 +578,8 @@ void CJabberProto::FtReceiveFinal(BOOL success, filetransfer *ft)
 	delete ft;
 }
 
+/////////////////////////////////////////////////////////////////////////////////////////
+
 void CJabberProto::OnHttpSlotAllocated(const TiXmlElement *iqNode, CJabberIqInfo *pInfo)
 {
 	filetransfer *ft = (filetransfer *)pInfo->GetUserData();
@@ -570,7 +589,7 @@ void CJabberProto::OnHttpSlotAllocated(const TiXmlElement *iqNode, CJabberIqInfo
 	if (pInfo->GetIqType() != JABBER_IQ_TYPE_RESULT) {
 		debugLogA("HTTP upload aborted");
 LBL_Fail:
-		ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, pInfo->GetIqType() == JABBER_IQ_TYPE_ERROR ? ACKRESULT_DENIED : ACKRESULT_FAILED, ft, 0);
+		ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, pInfo->GetIqType() == JABBER_IQ_TYPE_ERROR ? ACKRESULT_DENIED : ACKRESULT_FAILED, ft);
 		delete ft;
 		return;
 	}
@@ -653,7 +672,7 @@ LBL_Fail:
 					ProtoChainRecvMsg(ft->std.hContact, &recv);
 				}
 
-				ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ACKRESULT_SUCCESS, ft, 0);
+				ProtoBroadcastAck(ft->std.hContact, ACKTYPE_FILE, ACKRESULT_SUCCESS, ft);
 				delete ft;
 				return;
 			}
@@ -662,4 +681,118 @@ LBL_Fail:
 	}
 	else debugLogA("wrong or not recognizable http slot received");
 	goto LBL_Fail;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+bool CJabberProto::FtTryInlineFile(MCONTACT hContact, const wchar_t *pwszFileName)
+{
+	int fileFormat = ProtoGetAvatarFormat(pwszFileName);
+	if (fileFormat == PA_FORMAT_UNKNOWN) {
+		debugLogA("Unknown picture format");
+		return false;
+	}
+
+	char szClientJid[JABBER_MAX_JID_LEN];
+	if (!m_bJabberOnline || !GetClientJID(hContact, szClientJid, _countof(szClientJid))) {
+		debugLogA("Protocol is offline or no contact %d", hContact);
+		return false;
+	}
+
+	int fileId = _wopen(pwszFileName, _O_BINARY | _O_RDONLY);
+	if (fileId < 0) {
+		debugLogW(L"File %s cannot be opened for inlining", pwszFileName);
+		return false;
+	}
+
+	SHA_CTX ctx;
+	SHA1_Init(&ctx);
+	while (!_eof(fileId)) {
+		char buf[1024];
+		int nBytes = _read(fileId, buf, _countof(buf));
+		SHA1_Update(&ctx, buf, nBytes);
+	}
+	_close(fileId);
+
+	uint8_t hash[MIR_SHA1_HASH_SIZE];
+	SHA1_Final(hash, &ctx);
+	char szHash[MIR_SHA1_HASH_SIZE*2 + 1];
+	bin2hex(hash, sizeof(hash), szHash);
+
+	VARSW wszTempPath(L"%miranda_userdata%\\JabberTmp");
+	CreateDirectoryTreeW(wszTempPath);
+
+	CMStringW wszFileName(FORMAT, L"%s\\%S%s", wszTempPath.get(), szHash, ProtoGetAvatarExtension(fileFormat));
+	if (_waccess(wszFileName, 0))
+		if (!CopyFileW(pwszFileName, wszFileName, FALSE)) {
+			DWORD dwError = GetLastError();
+			debugLogW(L"File <%s> cannot be copied to <%s>: error %d", pwszFileName, wszFileName.c_str(), dwError);
+			return false;
+		}
+
+	XmlNode m("message");
+
+	if (ListGetItemPtr(LIST_CHATROOM, szClientJid) && strchr(szClientJid, '/') == nullptr)
+		XmlAddAttr(m, "type", "groupchat");
+	else
+		XmlAddAttr(m, "type", "chat");
+	XmlAddAttr(m, "to", szClientJid);
+	XmlAddAttrID(m, SerialNext());
+
+	auto *nHtml = m << XCHILDNS("html", JABBER_FEAT_XHTML);
+	auto *nBody = nHtml << XCHILDNS("body", "http://www.w3.org/1999/xhtml");
+	auto *nPara = nBody << XCHILD("p");
+	nPara << XCHILD("img") << XATTR("src", CMStringA(FORMAT, "cid:sha1+%s@bob.xmpp.org", szHash));
+
+	m << XCHILDNS("request", JABBER_FEAT_MESSAGE_RECEIPTS);
+	m << XCHILDNS("markable", JABBER_FEAT_CHAT_MARKERS);
+	m_ThreadInfo->send(m);
+	return true;
+}
+
+bool CJabberProto::FtHandleCidRequest(const TiXmlElement*, CJabberIqInfo *pInfo)
+{
+	auto *pChild = pInfo->GetChildNode();
+	if (pChild == nullptr)
+		return true;
+
+	const char *cid = XmlGetAttr(pChild, "cid");
+	if (cid == nullptr) {
+	LBL_Error:
+		XmlNodeIq iq("error", pInfo);
+		TiXmlElement *error = iq << XCHILD("error") << XATTRI("code", 400) << XATTR("type", "cancel");
+		error << XCHILDNS("bad-request", "urn:ietf:params:xml:ns:xmpp-stanzas");
+		m_ThreadInfo->send(iq);
+		return true;
+	}
+
+	if (memcmp(cid, "sha1+", 5))
+		goto LBL_Error;
+
+	CMStringA szCid(cid);
+	szCid.Delete(0, 5); szCid.Truncate(40);
+	VARSW wszTempPath(L"%miranda_userdata%\\JabberTmp");
+	CMStringW wszFileMask(FORMAT, L"%s\\%S.*", wszTempPath.get(), szCid.c_str());
+	WIN32_FIND_DATAW data;
+	HANDLE hFind = FindFirstFileW(wszFileMask, &data);
+	if (hFind == nullptr)
+		goto LBL_Error;
+	
+	FindClose(hFind);
+
+	int fileFormat = ProtoGetAvatarFormat(data.cFileName);
+	wszFileMask.Format(L"%s\\%s", wszTempPath.get(), data.cFileName);
+	int fileId = _wopen(wszFileMask, _O_BINARY | _O_RDONLY);
+	if (fileId < 0)
+		goto LBL_Error;
+
+	mir_ptr<BYTE> buf((BYTE *)mir_alloc(data.nFileSizeLow));
+	_read(fileId, buf, data.nFileSizeLow);
+	_close(fileId);
+
+	XmlNodeIq iq("result", pInfo);
+	auto *pData = iq << XCHILDNS("data", JABBER_FEAT_BITS) << XATTR("max-age", "2565000") << XATTR("type", ProtoGetAvatarMimeType(fileFormat)) << XATTR("cid", cid);
+	pData->SetText(ptrA(mir_base64_encode(buf, data.nFileSizeLow)).get());
+	m_ThreadInfo->send(iq);
+	return true;
 }
