@@ -234,10 +234,17 @@ FacebookUser* FacebookProto::RefreshThread(JSONNode& n) {
 	Chat_Control(m_szModuleName, chatId, m_bHideGroupchats ? WINDOW_HIDDEN : SESSION_INITDONE);
 	Chat_Control(m_szModuleName, chatId, SESSION_ONLINE);
 
-	auto* ret = new FacebookUser(_wtoi64(chatId), si->hContact, true);
-	m_users.insert(ret);
+	__int64 userId = _wtoi64(chatId);
+	auto* user = FindUser(userId);
 
-	return ret;
+	if (user == nullptr) {
+		user = new FacebookUser(userId, si->hContact, true);
+		m_users.insert(user);
+	}
+	else 
+		user->hContact = si->hContact;
+
+	return user;
 }
 
 FacebookUser* FacebookProto::RefreshThread(CMStringW& wszId) {
@@ -260,8 +267,10 @@ FacebookUser* FacebookProto::RefreshThread(CMStringW& wszId) {
 
 void FacebookProto::RefreshThreads()
 {
+	int threadsLimit = 40;
+
 	auto * pReq = CreateRequestGQL(FB_API_QUERY_THREADS);
-	JSONNode json; json << CHAR_PARAM("2", "true") << CHAR_PARAM("12", "false") << CHAR_PARAM("13", "false");
+	JSONNode json; json << INT_PARAM("1", threadsLimit) << CHAR_PARAM("2", "true") << CHAR_PARAM("12", "false") << CHAR_PARAM("13", "false");
 	pReq << CHAR_PARAM("query_params", json.write().c_str());
 	pReq->CalcSig();
 
@@ -270,8 +279,12 @@ void FacebookProto::RefreshThreads()
 		auto &root = reply.data()["viewer"]["message_threads"];
 
 		for (auto &n : root["nodes"]) {
-			RefreshThread(n);
+			if (n["is_group_thread"].as_bool() && n["is_viewer_subscribed"].as_bool() && !n["has_viewer_archived"].as_bool())
+				RefreshThread(n);
 		}
+
+		// TODO: save timestamp of last message/action/... into DB
+		// TODO: lower threadsLimit to 10, load next pages if timestamp of last message is higher than timestamp in DB
 	}
 }
 
@@ -615,7 +628,7 @@ void FacebookProto::OnPublishPrivateMessage(const JSONNode &root)
 			pUser = AddContact(wszUserId, true);
 	}
 	else if (bIsChat && Chat_GetUserInfo(m_szModuleName, wszUserId) == nullptr) // user already exists, but room is not initialized
-		pUser = RefreshThread(wszUserId); 
+		RefreshThread(wszUserId); 
 	
 
 	for (auto &it : metadata["tags"]) {
