@@ -17,114 +17,63 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "stdafx.h"
-#include "utility.h"
 
 #include <io.h>
 
-std::string b64encode(const std::string &s)
+http::response CTwitterProto::Execute(AsyncHttpRequest *pReq)
 {
-	return std::string(ptrA(mir_base64_encode(s.c_str(), s.length())));
-}
+	if (pReq->m_szUrl[0] == '/')
+		pReq->m_szUrl.Insert(0, TWITTER_BASE_URL);
 
-std::string int2str(int32_t iVal)
-{
-	char buf[100];
-	_itoa_s(iVal, buf, 10);
-	return std::string(buf);
-}
+	bool bIsJson = false;
+	if (!pReq->m_szParam.IsEmpty()) {
+		if (pReq->requestType == REQUEST_POST) {
+			if (pReq->m_szParam[0] == '{') {
+				bIsJson = true;
+				pReq->AddHeader("Content-Type", "application/json");
+			}
+			else pReq->AddHeader("Content-Type", "application/x-www-form-urlencoded");
+			pReq->AddHeader("Cache-Control", "no-cache");
 
-std::string int2str(uint64_t iVal)
-{
-	char buf[100];
-	_i64toa_s(iVal, buf, _countof(buf), 10);
-	return std::string(buf);
-}
-
-uint64_t str2int(const std::string &str)
-{
-	return _atoi64(str.c_str());
-}
-
-http::response mir_twitter::slurp(const std::string &url, http::method meth, OAuthParameters postParams)
-{
-	NETLIBHTTPREQUEST req = { sizeof(req) };
-	req.requestType = (meth == http::get) ? REQUEST_GET : REQUEST_POST;
-	req.szUrl = const_cast<char*>(url.c_str());
-
-	std::wstring url_WSTR = UTF8ToWide(url);
-	std::string pdata_STR;
-	std::wstring pdata_WSTR;
-	std::wstring auth;
-
-	if (meth == http::get) {
-		if (url_WSTR.size() > 0) { ppro_->debugLogW(L"**SLURP::GET - we have a URL: %s", url_WSTR.c_str()); }
-		if (consumerKey_.size() > 0) { ppro_->debugLogA("**SLURP::GET - we have a consumerKey"); }
-		if (consumerSecret_.size() > 0) { ppro_->debugLogA("**SLURP::GET - we have a consumerSecret"); }
-		if (oauthAccessToken_.size() > 0) { ppro_->debugLogA("**SLURP::GET - we have a oauthAccessToken"); }
-		if (oauthAccessTokenSecret_.size() > 0) { ppro_->debugLogA("**SLURP::GET - we have a oauthAccessTokenSecret"); }
-		if (pin_.size() > 0) { ppro_->debugLogA("**SLURP::GET - we have a pin"); }
-
-		auth = OAuthWebRequestSubmit(url_WSTR, L"GET", nullptr, consumerKey_, consumerSecret_,
-			oauthAccessToken_, oauthAccessTokenSecret_, pin_);
-	}
-	else {
-		// OAuthParameters postParams;
-		if (url_WSTR.size() > 0) { ppro_->debugLogW(L"**SLURP::POST - we have a URL: %s", url_WSTR.c_str()); }
-		if (consumerKey_.size() > 0) { ppro_->debugLogA("**SLURP::POST - we have a consumerKey"); }
-		if (consumerSecret_.size() > 0) { ppro_->debugLogA("**SLURP::POST - we have a consumerSecret"); }
-		if (oauthAccessToken_.size() > 0) { ppro_->debugLogA("**SLURP::POST - we have a oauthAccessToken"); }
-		if (oauthAccessTokenSecret_.size() > 0) { ppro_->debugLogA("**SLURP::POST - we have a oauthAccessTokenSecret"); }
-		if (pin_.size() > 0) { ppro_->debugLogA("**SLURP::POST - we have a pin"); }
-
-		pdata_WSTR = BuildQueryString(postParams);
-
-		ppro_->debugLogW(L"**SLURP::POST - post data is: %s", pdata_WSTR.c_str());
-
-		auth = OAuthWebRequestSubmit(url_WSTR, L"POST", &postParams, consumerKey_, consumerSecret_, oauthAccessToken_, oauthAccessTokenSecret_);
+			pReq->dataLength = (int)pReq->m_szParam.GetLength();
+			pReq->pData = pReq->m_szParam.Detach();
+		}
+		else {
+			pReq->m_szUrl.AppendChar('?');
+			pReq->m_szUrl += pReq->m_szParam;
+		}
 	}
 
-	std::string auth_STR = WideToUTF8(auth);
+	CMStringA auth;
+	if (pReq->requestType == REQUEST_GET)
+		auth = OAuthWebRequestSubmit(pReq->m_szUrl, "GET", "");
+	else
+		auth = OAuthWebRequestSubmit(pReq->m_szUrl, "POST", (bIsJson) ? "" : pReq->pData);
+	pReq->AddHeader("Authorization", auth);
 
-	NETLIBHTTPHEADER hdr[3];
-	hdr[0].szName = "Authorization";
-	hdr[0].szValue = const_cast<char*>(auth_STR.c_str());
-
-	req.headers = hdr;
-	req.headersCount = 1;
-
-	if (meth == http::post) {
-		hdr[1].szName = "Content-Type";
-		hdr[1].szValue = "application/x-www-form-urlencoded";
-		hdr[2].szName = "Cache-Control";
-		hdr[2].szValue = "no-cache";
-
-		pdata_STR = WideToUTF8(pdata_WSTR);
-
-		req.headersCount = 3;
-		req.dataLength = (int)pdata_STR.size();
-		req.pData = const_cast<char*>(pdata_STR.c_str());
-		ppro_->debugLogA("**SLURP::POST - req.pdata is %s", req.pData);
-	}
-
-	req.flags = NLHRF_HTTP11 | NLHRF_PERSISTENT | NLHRF_REDIRECT;
-	req.nlc = httpPOST_;
+	pReq->szUrl = pReq->m_szUrl.GetBuffer();
+	pReq->flags = NLHRF_HTTP11 | NLHRF_PERSISTENT | NLHRF_REDIRECT;
+	pReq->nlc = m_hConnHttp;
 	http::response resp_data;
-	NLHR_PTR resp(Netlib_HttpTransaction(handle_, &req));
+	NLHR_PTR resp(Netlib_HttpTransaction(m_hNetlibUser, pReq));
 	if (resp) {
-		ppro_->debugLogA("**SLURP - the server has responded!");
-		httpPOST_ = resp->nlc;
+		debugLogA("**SLURP - the server has responded!");
+		m_hConnHttp = resp->nlc;
 		resp_data.code = resp->resultCode;
-		resp_data.data = resp->pData ? resp->pData : "";
+		if (resp->pData)
+			resp_data.data = resp->pData;
 	}
 	else {
-		httpPOST_ = nullptr;
-		ppro_->debugLogA("SLURP - there was no response!");
+		m_hConnHttp = nullptr;
+		resp_data.code = 500;
+		debugLogA("SLURP - there was no response!");
 	}
 
+	delete pReq;
 	return resp_data;
 }
 
-bool save_url(HNETLIBUSER hNetlib, const std::string &url, const std::wstring &filename)
+bool save_url(HNETLIBUSER hNetlib, const CMStringA &url, const CMStringW &filename)
 {
 	NETLIBHTTPREQUEST req = { sizeof(req) };
 	req.requestType = REQUEST_GET;
@@ -132,20 +81,19 @@ bool save_url(HNETLIBUSER hNetlib, const std::string &url, const std::wstring &f
 	req.szUrl = const_cast<char*>(url.c_str());
 
 	NLHR_PTR resp(Netlib_HttpTransaction(hNetlib, &req));
-	if (resp) {
-		bool success = (resp->resultCode == 200);
-		if (success) {
-			// Create folder if necessary
-			std::wstring dir = filename.substr(0, filename.rfind('\\'));
-			CreateDirectoryTreeW(dir.c_str());
+	if (!resp)
+		return false;
+	
+	if (resp->resultCode != 200)
+		return false;
+	
+	// Create folder if necessary
+	CreatePathToFileW(filename);
 
-			// Write to file
-			FILE *f = _wfopen(filename.c_str(), L"wb");
-			fwrite(resp->pData, 1, resp->dataLength, f);
-			fclose(f);
-		}
-		return success;
-	}
-
-	return false;
+	// Write to file
+	FILE *f = _wfopen(filename, L"wb");
+	fwrite(resp->pData, 1, resp->dataLength, f);
+	fclose(f);
+	
+	return true;
 }

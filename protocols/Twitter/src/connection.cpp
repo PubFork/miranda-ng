@@ -17,12 +17,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "stdafx.h"
-#include "proto.h"
-#include "twitter.h"
 
-void CALLBACK TwitterProto::APC_callback(ULONG_PTR p)
+AsyncHttpRequest::AsyncHttpRequest(int type, const char *szUrl)
 {
-	reinterpret_cast<TwitterProto*>(p)->debugLogA("***** Executing APC");
+	requestType = type;
+	m_szUrl = szUrl;
+}
+
+void CALLBACK CTwitterProto::APC_callback(ULONG_PTR p)
+{
+	reinterpret_cast<CTwitterProto*>(p)->debugLogA("***** Executing APC");
 }
 
 template<typename T>
@@ -32,13 +36,9 @@ inline static T db_pod_get(MCONTACT hContact, const char *module, const char *se
 	if (db_get(hContact, module, setting, &dbv))
 		return errorValue;
 
-	// TODO: remove this, it's just a temporary workaround
-	if (dbv.type == DBVT_DWORD)
-		return dbv.dVal;
-
-	if (dbv.cpbVal != sizeof(T))
-		return errorValue;
-	return *reinterpret_cast<T*>(dbv.pbVal);
+	T ret = *(T*)dbv.pbVal;
+	db_free(&dbv);
+	return ret;
 }
 
 template<typename T>
@@ -47,7 +47,7 @@ inline static INT_PTR db_pod_set(MCONTACT hContact, const char *module, const ch
 	return db_set_blob(hContact, module, setting, &val, sizeof(T));
 }
 
-void TwitterProto::SignOn(void*)
+void CTwitterProto::SignOn(void*)
 {
 	debugLogA("***** Beginning SignOn process");
 	mir_cslock lck(signon_lock_);
@@ -69,135 +69,70 @@ void TwitterProto::SignOn(void*)
 
 		setAllContactStatuses(ID_STATUS_ONLINE);
 		SetChatStatus(ID_STATUS_ONLINE);
-		hMsgLoop_ = ForkThreadEx(&TwitterProto::MessageLoop, nullptr, nullptr);
+		hMsgLoop_ = ForkThreadEx(&CTwitterProto::MessageLoop, nullptr, nullptr);
 	}
 
 	debugLogA("***** SignOn complete");
 }
 
-bool TwitterProto::NegotiateConnection()
+bool CTwitterProto::NegotiateConnection()
 {
 	debugLogA("***** Negotiating connection with Twitter");
 	disconnectionCount = 0;
 
 	// saving the current status to a temp var
 	int old_status = m_iStatus;
-	DBVARIANT dbv;
 
-	wstring oauthToken;
-	wstring oauthTokenSecret;
-	wstring oauthAccessToken;
-	wstring oauthAccessTokenSecret;
-	string screenName;
+	CMStringA szOauthToken = getMStringA(TWITTER_KEY_OAUTH_TOK);
+	CMStringA szOauthTokenSecret = getMStringA(TWITTER_KEY_OAUTH_TOK_SEC);
+	m_szUserName = getMStringA(TWITTER_KEY_NICK);
+	if (m_szUserName.IsEmpty())
+		m_szUserName = getMStringA(TWITTER_KEY_UN);
 
-	INT_PTR dbTOK = getWString(TWITTER_KEY_OAUTH_TOK, &dbv);
-	if (!dbTOK) {
-		oauthToken = dbv.pwszVal;
-		db_free(&dbv);
-	}
-
-	INT_PTR dbTOKSec = getWString(TWITTER_KEY_OAUTH_TOK_SECRET, &dbv);
-	if (!dbTOKSec) {
-		oauthTokenSecret = dbv.pwszVal;
-		db_free(&dbv);
-	}
-
-	INT_PTR dbName = getString(TWITTER_KEY_NICK, &dbv);
-	if (!dbName) {
-		screenName = dbv.pszVal;
-		db_free(&dbv);
-	}
-	else {
-		dbName = getString(TWITTER_KEY_UN, &dbv);
-		if (!dbName) {
-			screenName = dbv.pszVal;
-			setString(TWITTER_KEY_NICK, dbv.pszVal);
-			db_free(&dbv);
-		}
-	}
-
-	// twitter changed the base URL in v1.1 of the API, I don't think users will need to modify it, so
-	// i'll be forcing it to the new API URL here. After a while I can get rid of this as users will
-	// have either had this run at least once, or have reset their miranda profile. 14/10/2012
-	if (getByte("UpgradeBaseURL", 1)) {
-		setString(TWITTER_KEY_BASEURL, "https://api.twitter.com/");
-		setByte("UpgradeBaseURL", 0);
-	}
-
-	if ((oauthToken.size() <= 1) || (oauthTokenSecret.size() <= 1)) {
+	if (szOauthToken.IsEmpty() || szOauthTokenSecret.IsEmpty()) {
 		// first, reset all the keys so we can start fresh
-		resetOAuthKeys();
 		debugLogA("**NegotiateConnection - Reset OAuth Keys");
+		resetOAuthKeys();
 
-		debugLogA("**NegotiateConnection - Setting Consumer Keys...");
-		twit_.set_credentials("", OAUTH_CONSUMER_KEY, OAUTH_CONSUMER_SECRET, oauthToken, oauthTokenSecret, L"", false);
+		m_szUserName.Empty();
 		debugLogA("**NegotiateConnection - Requesting oauthTokens");
-		http::response resp = twit_.request_token();
+		http::response resp = request_token();
 
-		wstring rdata_WSTR = UTF8ToWide(resp.data);
+		StringPairs response = ParseQueryString(resp.data);
+		szOauthToken = response[L"oauth_token"];
+		szOauthTokenSecret = response[L"oauth_token_secret"];
 
-		OAuthParameters response = twit_.ParseQueryString(rdata_WSTR);
-		oauthToken = response[L"oauth_token"];
-		oauthTokenSecret = response[L"oauth_token_secret"];
-
-		if (oauthToken.length() < 1) {
-			ShowPopup("OAuth Tokens not received, check your internet connection?", 1);
+		if (szOauthToken.IsEmpty()) {
+			ShowPopup("OAuth token not received, check your internet connection?", 1);
 			debugLogA("**NegotiateConnection - OAuth tokens not received, stopping before we open the web browser..");
 			return false;
 		}
 
 		// write those bitches to the db foe latta
-		setWString(TWITTER_KEY_OAUTH_TOK, oauthToken.c_str());
-		setWString(TWITTER_KEY_OAUTH_TOK_SECRET, oauthTokenSecret.c_str());
+		setString(TWITTER_KEY_OAUTH_TOK, m_szAccessToken = szOauthToken);
+		setString(TWITTER_KEY_OAUTH_TOK_SEC, m_szAccessTokenSecret = szOauthTokenSecret);
 
 		// this looks like bad code.. can someone clean this up please?  or confirm that it's ok
-		wchar_t buf[1024] = {};
-		mir_snwprintf(buf, L"https://api.twitter.com/oauth/authorize?oauth_token=%s", oauthToken.c_str());
-
-		debugLogW(L"**NegotiateConnection - Launching %s", buf);
-		ShellExecute(nullptr, L"open", buf, nullptr, nullptr, SW_SHOWNORMAL);
+		char buf[1024];
+		mir_snprintf(buf, "https://api.twitter.com/oauth/authorize?oauth_token=%s", szOauthToken.c_str());
+		debugLogA("**NegotiateConnection - Launching %s", buf);
+		Utils_OpenUrl(buf);
 
 		ShowPinDialog();
 	}
 
-	if (!getWString(TWITTER_KEY_GROUP, &dbv)) {
-		Clist_GroupCreate(0, dbv.pwszVal);
-		db_free(&dbv);
-	}
-
-	bool realAccessTok = false;
-	bool realAccessTokSecret = false;
+	ptrW wszGroup(getWStringA(TWITTER_KEY_GROUP));
+	if (wszGroup)
+		Clist_GroupCreate(0, wszGroup);
 
 	// remember, dbTOK is 0 (false) if the db setting has returned something
-	dbTOK = getWString(TWITTER_KEY_OAUTH_ACCESS_TOK, &dbv);
-	if (!dbTOK) {
-		oauthAccessToken = dbv.pwszVal;
-		db_free(&dbv);
-		// this bit is saying "if we have found the db key, but it contains no data, then set dbTOK to 1"
-		if (oauthAccessToken.size() > 1)
-			realAccessTok = true;
-		else
-			debugLogA("**NegotiateConnection - oauthAccesToken too small? this is.. weird.");
-	}
+	szOauthToken = getMStringA(TWITTER_KEY_OAUTH_ACCESS_TOK);
+	szOauthTokenSecret = getMStringA(TWITTER_KEY_OAUTH_ACCESS_SEC);
 
-	dbTOKSec = getWString(TWITTER_KEY_OAUTH_ACCESS_TOK_SECRET, &dbv);
-	if (!dbTOKSec) {
-		oauthAccessTokenSecret = dbv.pwszVal;
-		db_free(&dbv);
-		if (oauthAccessTokenSecret.size() > 1)
-			realAccessTokSecret = true;
-		else
-			debugLogA("**NegotiateConnection - oauthAccessTokenSecret too small? weird");
-	}
-
-	if (!realAccessTok || !realAccessTokSecret) {  // if we don't have one of these beasties then lets go get 'em!
-		wstring pin;
+	if (szOauthToken.IsEmpty() || szOauthTokenSecret.IsEmpty()) {  // if we don't have one of these beasties then lets go get 'em!
 		debugLogA("**NegotiateConnection - either the accessToken or accessTokenSecret was not there..");
-		if (!getWString(TWITTER_KEY_OAUTH_PIN, &dbv)) {
-			pin = dbv.pwszVal;
-			db_free(&dbv);
-		}
-		else {
+		m_szPin = getMStringA(TWITTER_KEY_OAUTH_PIN);
+		if (m_szPin.IsEmpty()) {
 			ShowPopup(TranslateT("OAuth variables are out of sequence, they have been reset. Please reconnect and reauthorize Miranda to Twitter.com (do the PIN stuff again)"));
 			debugLogA("**NegotiateConnection - We don't have a PIN?  this doesn't make sense.  Resetting OAuth keys and setting offline.");
 			resetOAuthKeys();
@@ -211,12 +146,9 @@ bool TwitterProto::NegotiateConnection()
 			return false;
 		}
 
-		debugLogA("**NegotiateConnection - Setting Consumer Keys and PIN...");
-
-		twit_.set_credentials("", OAUTH_CONSUMER_KEY, OAUTH_CONSUMER_SECRET, oauthToken, oauthTokenSecret, pin, false);
-
 		debugLogA("**NegotiateConnection - requesting access tokens...");
-		http::response accessResp = twit_.request_access_tokens();
+		http::response accessResp = request_access_tokens();
+		m_szPin.Empty();
 		if (accessResp.code != 200) {
 			debugLogA("**NegotiateConnection - Failed to get Access Tokens, HTTP response code is: %d", accessResp.code);
 			ShowPopup(TranslateT("Failed to get Twitter Access Tokens, please go offline and try again. If this keeps happening, check your internet connection."));
@@ -232,45 +164,35 @@ bool TwitterProto::NegotiateConnection()
 
 			return false;
 		}
-		else {
-			debugLogA("**NegotiateConnection - Successfully retrieved Access Tokens");
 
-			wstring rdata_WSTR2 = UTF8ToWide(accessResp.data);
+		debugLogA("**NegotiateConnection - Successfully retrieved Access Tokens");
 
-			OAuthParameters accessTokenParameters = twit_.ParseQueryString(rdata_WSTR2);
-			oauthAccessToken = accessTokenParameters[L"oauth_token"];
-			oauthAccessTokenSecret = accessTokenParameters[L"oauth_token_secret"];
-			screenName = WideToUTF8(accessTokenParameters[L"screen_name"]);
-			debugLogA("**NegotiateConnection - screen name is %s", screenName.c_str());
+		StringPairs accessTokenParameters = ParseQueryString(accessResp.data);
+		m_szAccessToken = accessTokenParameters[L"oauth_token"];
+		m_szAccessTokenSecret = accessTokenParameters[L"oauth_token_secret"];
+		m_szUserName = accessTokenParameters[L"screen_name"];
+		debugLogA("**NegotiateConnection - screen name is %s", m_szUserName.c_str());
 
-			// save em
-			setWString(TWITTER_KEY_OAUTH_ACCESS_TOK, oauthAccessToken.c_str());
-			setWString(TWITTER_KEY_OAUTH_ACCESS_TOK_SECRET, oauthAccessTokenSecret.c_str());
-			setString(TWITTER_KEY_NICK, screenName.c_str());
-			setString(TWITTER_KEY_UN, screenName.c_str());
-		}
+		// save em
+		setUString(TWITTER_KEY_OAUTH_ACCESS_TOK, m_szAccessToken);
+		setUString(TWITTER_KEY_OAUTH_ACCESS_SEC, m_szAccessTokenSecret);
+		setUString(TWITTER_KEY_NICK, m_szUserName);
+		setUString(TWITTER_KEY_UN, m_szUserName);
 	}
-
-	if (!getString(TWITTER_KEY_BASEURL, &dbv)) {
-		mir_cslock s(twitter_lock_);
-		twit_.set_base_url(dbv.pszVal);
-		db_free(&dbv);
+	else {
+		m_szAccessToken = szOauthToken;
+		m_szAccessTokenSecret = szOauthTokenSecret;
 	}
 
 	debugLogA("**NegotiateConnection - Setting Consumer Keys and verifying creds...");
 
-	if (screenName.empty()) {
+	if (m_szUserName.IsEmpty()) {
 		ShowPopup(TranslateT("You're missing the Nick key in the database. This isn't really a big deal, but you'll notice some minor quirks (self contact in list, no group chat outgoing message highlighting, etc). To fix it either add it manually or recreate your Miranda Twitter account"));
 		debugLogA("**NegotiateConnection - Missing the Nick key in the database.  Everything will still work, but it's nice to have");
 	}
 
-	bool success;
-	{
-		mir_cslock s(twitter_lock_);
-		success = twit_.set_credentials(screenName, OAUTH_CONSUMER_KEY, OAUTH_CONSUMER_SECRET, oauthAccessToken, oauthAccessTokenSecret, L"", true);
-	}
-
-	if (!success) {
+	auto *req = new AsyncHttpRequest(REQUEST_GET, "/account/verify_credentials.json");
+	if (Execute(req).code != 200) {
 		debugLogA("**NegotiateConnection - Verifying credentials failed!  No internet maybe?");
 
 		ProtoBroadcastAck(0, ACKTYPE_STATUS, ACKRESULT_FAILED, (HANDLE)old_status, m_iStatus);
@@ -288,7 +210,7 @@ bool TwitterProto::NegotiateConnection()
 	return true;
 }
 
-void TwitterProto::MessageLoop(void*)
+void CTwitterProto::MessageLoop(void*)
 {
 	debugLogA("***** Entering Twitter::MessageLoop");
 
@@ -318,8 +240,7 @@ void TwitterProto::MessageLoop(void*)
 		if (m_iStatus != ID_STATUS_ONLINE)
 			break;
 
-		if (i % 10 == 0)
-			UpdateMessages(new_account);
+		UpdateMessages(new_account);
 
 		if (new_account) { // Not anymore!
 			new_account = false;
@@ -328,45 +249,41 @@ void TwitterProto::MessageLoop(void*)
 
 		if (m_iStatus != ID_STATUS_ONLINE)
 			break;
-		debugLogA("***** TwitterProto::MessageLoop going to sleep...");
+		debugLogA("***** CTwitterProto::MessageLoop going to sleep...");
 		if (SleepEx(poll_rate * 1000, true) == WAIT_IO_COMPLETION)
 			break;
-		debugLogA("***** TwitterProto::MessageLoop waking up...");
+		debugLogA("***** CTwitterProto::MessageLoop waking up...");
 
 		popups = true;
 	}
 
-	{
-		mir_cslock s(twitter_lock_);
-		twit_.set_credentials("", L"", L"", L"", L"", L"", false);
-	}
-	debugLogA("***** Exiting TwitterProto::MessageLoop");
+	debugLogA("***** Exiting CTwitterProto::MessageLoop");
 }
 
 struct update_avatar
 {
-	update_avatar(MCONTACT hContact, const std::string &url) : hContact(hContact), url(url) {}
+	update_avatar(MCONTACT hContact, const CMStringA &url) : hContact(hContact), url(url) {}
 	MCONTACT hContact;
-	std::string url;
+	CMStringA url;
 };
 
 /* void *p should always be a struct of type update_avatar */
-void TwitterProto::UpdateAvatarWorker(void *p)
+void CTwitterProto::UpdateAvatarWorker(void *p)
 {
 	if (p == nullptr)
 		return;
-	std::unique_ptr<update_avatar> data(static_cast<update_avatar*>(p));
-	DBVARIANT dbv = { 0 };
+	
+	std::unique_ptr<update_avatar> data((update_avatar*)p);
 
 	// db_get_s returns 0 when it suceeds, so if this suceeds it will return 0, or false.
 	// therefore if it returns 1, or true, we want to return as there is no such user.
 	// as a side effect, dbv now has the username in it i think
-	if (getWString(data->hContact, TWITTER_KEY_UN, &dbv))
+	CMStringA username(getMStringA(data->hContact, TWITTER_KEY_UN));
+	if (username.IsEmpty())
 		return;
 
-	std::string ext = data->url.substr(data->url.rfind('.')); // finds the filetype of the avatar
-	std::wstring filename = GetAvatarFolder() + L'\\' + dbv.pwszVal + (wchar_t*)_A2T(ext.c_str()); // local filename and path
-	db_free(&dbv);
+	CMStringA ext = data->url.Right(data->url.ReverseFind('.')); // finds the filetype of the avatar
+	CMStringW filename(FORMAT, L"%s\\%S%S", GetAvatarFolder().c_str(), username.c_str(), ext.c_str()); // local filename and path
 
 	PROTO_AVATAR_INFORMATION ai = { 0 };
 	ai.hContact = data->hContact;
@@ -397,7 +314,7 @@ void TwitterProto::UpdateAvatarWorker(void *p)
 	debugLogA("***** Done avatar: %s", data->url.c_str());
 }
 
-void TwitterProto::UpdateAvatar(MCONTACT hContact, const std::string &url, bool force)
+void CTwitterProto::UpdateAvatar(MCONTACT hContact, const CMStringA &url, bool force)
 {
 	DBVARIANT dbv = { 0 };
 
@@ -414,55 +331,55 @@ void TwitterProto::UpdateAvatar(MCONTACT hContact, const std::string &url, bool 
 			ProtoBroadcastAck(hContact, ACKTYPE_AVATAR, ACKRESULT_SUCCESS, &ai, 0);
 		}
 		else {
-			ForkThread(&TwitterProto::UpdateAvatarWorker, new update_avatar(hContact, url));
+			ForkThread(&CTwitterProto::UpdateAvatarWorker, new update_avatar(hContact, url));
 		}
 	}
 
 	db_free(&dbv);
 }
 
-void TwitterProto::UpdateFriends()
+void CTwitterProto::UpdateFriends()
 {
-	try {
-		std::vector<twitter_user> friends;
-		{
-			mir_cslock s(twitter_lock_);
-			friends = twit_.get_friends();
-		}
+	auto *req = new AsyncHttpRequest(REQUEST_GET, "/friends/list.json");
+	http::response resp = Execute(req);
+	if (resp.code != 200) {
+		debugLogA("Friend list reading failed");
+		return;
+	}
 
-		for (auto &i : friends) {
-			if (i.username == twit_.get_username())
-				continue;
+	JSONNode root = JSONNode::parse(resp.data.c_str());
+	if (!root) {
+		debugLogA("unable to parse response");
+		return;
+	}
 
-			MCONTACT hContact = AddToClientList(i.username.c_str(), i.status.text.c_str());
-			setUString(hContact, "Nick", i.real_name.c_str());
-			UpdateAvatar(hContact, i.profile_image_url);
-		}
-		disconnectionCount = 0;
-		debugLogA("***** Friends list updated");
+	for (auto &one : root["users"]) {
+		std::string username = one["screen_name"].as_string();
+		if (m_szUserName == username.c_str())
+			continue;
+
+		std::string id = one["id_str"].as_string();
+		std::string real_name = one["name"].as_string();
+		std::string profile_image_url = one["profile_image_url"].as_string();
+		std::string status_text = one["status"]["text"].as_string();
+
+		MCONTACT hContact = AddToClientList(username.c_str(), status_text.c_str());
+		setString(hContact, TWITTER_KEY_ID, id.c_str());
+		setUString(hContact, "Nick", real_name.c_str());
+		UpdateAvatar(hContact, profile_image_url.c_str());
 	}
-	catch (const bad_response &) {
-		++disconnectionCount;
-		debugLogA("***** UpdateFriends - Bad response from server, this has happened %d time(s)", disconnectionCount);
-		if (disconnectionCount > 2) {
-			debugLogA("***** UpdateFriends - Too many bad responses from the server, signing off");
-			SetStatus(ID_STATUS_OFFLINE);
-		}
-	}
-	catch (const std::exception &e) {
-		ShowPopup((std::string("While updating friends list, an error occurred: ") + e.what()).c_str());
-		debugLogA("***** Error updating friends list: %s", e.what());
-	}
+	disconnectionCount = 0;
+	debugLogA("***** Friends list updated");
 }
 
 LRESULT CALLBACK PopupWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-	std::string *url;
+	CMStringA *url;
 
 	switch (message) {
 	case WM_COMMAND:
 		// Get the plugin data (we need the Popup service to do it)
-		url = (std::string *)PUGetPluginData(hwnd);
+		url = (CMStringA *)PUGetPluginData(hwnd);
 		if (url != nullptr)
 			Utils_OpenUrl(url->c_str());
 
@@ -475,7 +392,7 @@ LRESULT CALLBACK PopupWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
 
 	case UM_FREEPLUGINDATA:
 		// After close, free
-		url = (std::string *)PUGetPluginData(hwnd);
+		url = (CMStringA *)PUGetPluginData(hwnd);
 		delete url;
 		return FALSE;
 	}
@@ -483,7 +400,7 @@ LRESULT CALLBACK PopupWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
 	return DefWindowProc(hwnd, message, wParam, lParam);
 };
 
-void TwitterProto::ShowContactPopup(MCONTACT hContact, const std::string &text, const std::string *url)
+void CTwitterProto::ShowContactPopup(MCONTACT hContact, const CMStringA &text, const CMStringA *url)
 {
 	if (!getByte(TWITTER_KEY_POPUP_SHOW))
 		return;
@@ -510,119 +427,174 @@ void TwitterProto::ShowContactPopup(MCONTACT hContact, const std::string &text, 
 		popup.PluginData = (void *)url;
 	}
 
-	mbcs_to_tcs(CP_UTF8, text.c_str(), popup.lpwzText, MAX_SECONDLINE);
+	wcsncpy_s(popup.lpwzText, Utf2T(text), MAX_SECONDLINE);
 	PUAddPopupW(&popup);
 }
 
-void TwitterProto::UpdateStatuses(bool pre_read, bool popups, bool tweetToMsg)
+void CTwitterProto::UpdateStatuses(bool pre_read, bool popups, bool tweetToMsg)
 {
-	try {
-		twitter::status_list updates;
-		{
-			mir_cslock s(twitter_lock_);
-			updates = twit_.get_statuses(200, since_id_);
+	auto *req = new AsyncHttpRequest(REQUEST_GET, "/statuses/home_timeline.json");
+	req << INT_PARAM("count", 200);
+	if (since_id_ != 0)
+		req << INT64_PARAM("since_id", since_id_);
+
+	http::response resp = Execute(req);
+	if (resp.code != 200) {
+		debugLogA("Status update failed with error %d", resp.code);
+		return;
+	}
+
+	JSONNode root = JSONNode::parse(resp.data.c_str());
+	if (!root) {
+		debugLogA("Status update failed: unable to parse response");
+		return;
+	}
+
+	OBJLIST<twitter_user> messages(10);
+
+	for (auto &one : root) {
+		const JSONNode &pUser = one["user"];
+
+		auto *u = new twitter_user();
+		u->username = pUser["screen_name"].as_string();
+		u->real_name = pUser["name"].as_string();
+		u->profile_image_url = pUser["profile_image_url"].as_string();
+
+		CMStringA retweeteesName, retweetText;
+
+		// the tweet will be truncated unless we take action.  i hate you CTwitterProto API
+		const JSONNode &pStatus = one["retweeted_status"];
+		if (pStatus) {
+			// here we grab the "retweeted_status" um.. section?  it's in here that all the info we need is
+			// at this point the user will get no tweets and an error popup if the tweet happens to be exactly 140 chars, start with
+			// "RT @", end in " ...", and notactually be a real retweet.  it's possible but unlikely, wish i knew how to get
+			// the retweet_count variable to work :(
+			const JSONNode &pRetweet = one["retweeted_status"],
+				&pUser2 = pRetweet["user"];
+
+			retweeteesName = pUser2["screen_name"].as_string().c_str(); // the user that is being retweeted
+			retweetText = pRetweet["text"].as_string().c_str(); // their tweet in all it's untruncated glory
+
+			// fix html entities in the text
+			htmlEntitiesDecode(retweetText);
+
+			u->status.text = "RT @" + retweeteesName + " " + retweetText; // mash it together in some format people will understand
+		}
+		else {
+			// if it's not truncated, then the CTwitterProto API returns the native RT correctly anyway,
+			CMStringA rawText = one["text"].as_string().c_str();
+
+			// fix html entities in the text
+			htmlEntitiesDecode(rawText);
+
+			u->status.text = rawText;
 		}
 
-		if (!updates.empty())
-			since_id_ = max(since_id_, updates[0].status.id);
+		u->status.id = _atoi64(one["id"].as_string().c_str());
+		if (u->status.id > since_id_)
+			since_id_ = u->status.id;
 
-		for (twitter::status_list::reverse_iterator i = updates.rbegin(); i != updates.rend(); ++i) {
-
-			if (!pre_read && in_chat_)
-				UpdateChat(*i);
-
-			if (i->username == twit_.get_username())
-				continue;
-
-			MCONTACT hContact = AddToClientList(i->username.c_str(), "");
-			UpdateAvatar(hContact, i->profile_image_url);
-
-			// if we send twits as messages, add an unread event
-			if (tweetToMsg) {
-				DBEVENTINFO dbei = {};
-				dbei.pBlob = (BYTE*)(i->status.text.c_str());
-				dbei.cbBlob = (int)i->status.text.size() + 1;
-				dbei.eventType = TWITTER_DB_EVENT_TYPE_TWEET;
-				dbei.flags = DBEF_UTF;
-				dbei.timestamp = static_cast<DWORD>(i->status.time);
-				dbei.szModule = m_szModuleName;
-				db_event_add(hContact, &dbei);
-			}
-			else db_set_utf(hContact, "CList", "StatusMsg", i->status.text.c_str());
-
-			if (!pre_read && popups) {
-				std::stringstream url;
-				url << std::string("https://twitter.com/") << i->username << std::string("/status/") << i->status.id;
-				Skin_PlaySound("TwitterNew");
-				ShowContactPopup(hContact, i->status.text, new std::string(url.str()));
-			}
-		}
-
-		db_pod_set(0, m_szModuleName, TWITTER_KEY_SINCEID, since_id_);
-		disconnectionCount = 0;
-		debugLogA("***** Status messages updated");
+		std::string timestr = one["created_at"].as_string();
+		u->status.time = parse_time(timestr.c_str());
+		messages.insert(u);
 	}
-	catch (const bad_response &) {
-		++disconnectionCount;
-		debugLogA("***** UpdateStatuses - Bad response from server, this has happened %d time(s)", disconnectionCount);
-		if (disconnectionCount > 2) {
-			debugLogA("***** UpdateStatuses - Too many bad responses from the server, signing off");
-			SetStatus(ID_STATUS_OFFLINE);
+
+	for (auto &u : messages.rev_iter()) {
+		if (!pre_read && in_chat_)
+			UpdateChat(*u);
+
+		if (u->username.c_str() == m_szUserName)
+			continue;
+
+		MCONTACT hContact = AddToClientList(u->username.c_str(), "");
+		UpdateAvatar(hContact, u->profile_image_url.c_str());
+
+		// if we send twits as messages, add an unread event
+		if (tweetToMsg) {
+			DBEVENTINFO dbei = {};
+			dbei.pBlob = (BYTE*)(u->status.text.c_str());
+			dbei.cbBlob = (int)u->status.text.length() + 1;
+			dbei.eventType = TWITTER_DB_EVENT_TYPE_TWEET;
+			dbei.flags = DBEF_UTF;
+			dbei.timestamp = static_cast<DWORD>(u->status.time);
+			dbei.szModule = m_szModuleName;
+			db_event_add(hContact, &dbei);
+		}
+		else db_set_utf(hContact, "CList", "StatusMsg", u->status.text.c_str());
+
+		if (!pre_read && popups) {
+			Skin_PlaySound("TwitterNew");
+			ShowContactPopup(hContact, u->status.text.c_str(), new CMStringA(FORMAT, "https://twitter.com/%s/status/%lld", u->username.c_str(), u->status.id));
 		}
 	}
-	catch (const std::exception &e) {
-		ShowPopup((std::string("While updating status messages, an error occurred: ")
-			+ e.what()).c_str());
-		debugLogA("***** Error updating status messages: %s", e.what());
-	}
+
+	db_pod_set(0, m_szModuleName, TWITTER_KEY_SINCEID, since_id_);
+	disconnectionCount = 0;
+	debugLogA("***** Status messages updated");
 }
 
-void TwitterProto::UpdateMessages(bool pre_read)
+void CTwitterProto::UpdateMessages(bool pre_read)
 {
-	try {
-		twitter::status_list messages;
-		{
-			mir_cslock s(twitter_lock_);
-			messages = twit_.get_direct(dm_since_id_);
+	auto *req = new AsyncHttpRequest(REQUEST_GET, "/direct_messages/events/list.json");
+	req << INT_PARAM("count", 50);
+	if (dm_since_id_ != 0)
+		req << INT64_PARAM("since_id", dm_since_id_);
+
+	http::response resp = Execute(req);
+	if (resp.code != 200) {
+		debugLogA("Message request failed, error %d", resp.code);
+		return;
+	}
+
+	JSONNode root = JSONNode::parse(resp.data.c_str());
+	if (!root) {
+		debugLogA("unable to parse response");
+		return;
+	}
+
+	for (auto &one : root["events"]) {
+		std::string type = one["type"].as_string();
+		if (type != "message_create")
+			continue;
+
+		auto &msgCreate = one["message_create"];
+		std::string sender = msgCreate["sender_id"].as_string();
+		MCONTACT hContact = FindContactById(sender.c_str());
+		if (hContact == INVALID_CONTACT_ID) {
+			debugLogA("Message from unknown sender %s, ignored", sender.c_str());
+			continue;
 		}
 
-		if (messages.size())
-			dm_since_id_ = max(dm_since_id_, messages[0].status.id);
+		std::string text = msgCreate["message_data"]["text"].as_string();
+		__time64_t time = _atoi64(one["created_timestamp"].as_string().c_str()) / 1000;
 
-		for (twitter::status_list::reverse_iterator i = messages.rbegin(); i != messages.rend(); ++i) {
-			MCONTACT hContact = AddToClientList(i->username.c_str(), "");
+		std::string msgid = one["id"].as_string();
+		if (db_event_getById(m_szModuleName, msgid.c_str()))
+			continue;
 
-			PROTORECVEVENT recv = { 0 };
-			if (pre_read)
-				recv.flags |= PREF_CREATEREAD;
-			recv.szMessage = const_cast<char*>(i->status.text.c_str());
-			recv.timestamp = static_cast<DWORD>(i->status.time);
-			ProtoChainRecvMsg(hContact, &recv);
-		}
+		twitter_id id = _atoi64(msgid.c_str());
+		if (id > dm_since_id_)
+			dm_since_id_ = id;
 
-		db_pod_set(0, m_szModuleName, TWITTER_KEY_DMSINCEID, dm_since_id_);
-		disconnectionCount = 0;
-		debugLogA("***** Direct messages updated");
+		PROTORECVEVENT recv = { 0 };
+		if (pre_read)
+			recv.flags |= PREF_CREATEREAD;
+		recv.szMessage = const_cast<char*>(text.c_str());
+		recv.timestamp = static_cast<DWORD>(time);
+		recv.szMsgId = msgid.c_str();
+		ProtoChainRecvMsg(hContact, &recv);
 	}
-	catch (const bad_response &) {
-		++disconnectionCount;
-		debugLogA("***** UpdateMessages - Bad response from server, this has happened %d time(s)", disconnectionCount);
-		if (disconnectionCount > 2) {
-			debugLogA("***** UpdateMessages - Too many bad responses from the server, signing off");
-			SetStatus(ID_STATUS_OFFLINE);
-		}
-	}
-	catch (const std::exception &e) {
-		ShowPopup((std::string("While updating direct messages, an error occurred: ") + e.what()).c_str());
-		debugLogA("***** Error updating direct messages: %s", e.what());
-	}
+
+	db_pod_set(0, m_szModuleName, TWITTER_KEY_DMSINCEID, dm_since_id_);
+	disconnectionCount = 0;
+	debugLogA("***** Direct messages updated");
 }
 
-void TwitterProto::resetOAuthKeys()
+void CTwitterProto::resetOAuthKeys()
 {
 	delSetting(TWITTER_KEY_OAUTH_ACCESS_TOK);
-	delSetting(TWITTER_KEY_OAUTH_ACCESS_TOK_SECRET);
+	delSetting(TWITTER_KEY_OAUTH_ACCESS_SEC);
 	delSetting(TWITTER_KEY_OAUTH_TOK);
-	delSetting(TWITTER_KEY_OAUTH_TOK_SECRET);
+	delSetting(TWITTER_KEY_OAUTH_TOK_SEC);
 	delSetting(TWITTER_KEY_OAUTH_PIN);
 }

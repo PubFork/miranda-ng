@@ -21,6 +21,19 @@ struct AsyncHttpRequest : public MTHttpRequest<CDiscordProto>
 	bool m_bMainSite;
 };
 
+class JsonReply
+{
+	JSONNode *m_root = nullptr;
+	int m_errorCode = 0;
+
+public:
+	JsonReply(NETLIBHTTPREQUEST *);
+	~JsonReply();
+
+	__forceinline JSONNode& data() const { return *m_root; }
+	__forceinline operator bool() const { return m_errorCode == 200; }
+};
+
 /////////////////////////////////////////////////////////////////////////////////////////
 
 struct CDiscordRole : public MZeroedObject
@@ -159,7 +172,6 @@ class CDiscordProto : public PROTO<CDiscordProto>
 	void __cdecl SendFileThread(void*);
 	void __cdecl ServerThread(void*);
 	void __cdecl SearchThread(void *param);
-	void __cdecl SendMessageAckThread(void* param);
 	void __cdecl BatchChatCreate(void* param);
 	void __cdecl GetAwayMsgThread(void *param);
 
@@ -179,6 +191,7 @@ class CDiscordProto : public PROTO<CDiscordProto>
 	
 	void ExecuteRequest(AsyncHttpRequest *pReq);
 	void Push(AsyncHttpRequest *pReq, int iTimeout = 10000);
+	void SaveToken(const JSONNode &data);
 
 	HANDLE m_hWorkerThread;       // worker thread handle
 	HNETLIBCONN m_hAPIConnection; // working connection
@@ -386,6 +399,7 @@ public:
 	void OnReceiveCreateChannel(NETLIBHTTPREQUEST*, AsyncHttpRequest*);
 	void OnReceiveFile(NETLIBHTTPREQUEST*, AsyncHttpRequest*);
 	void OnReceiveGateway(NETLIBHTTPREQUEST*, AsyncHttpRequest*);
+	void OnReceiveMarkRead(NETLIBHTTPREQUEST *, AsyncHttpRequest *);
 	void OnReceiveMessageAck(NETLIBHTTPREQUEST*, AsyncHttpRequest*);
 	void OnReceiveToken(NETLIBHTTPREQUEST*, AsyncHttpRequest*);
 
