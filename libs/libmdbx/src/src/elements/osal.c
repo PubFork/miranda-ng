@@ -67,23 +67,6 @@ typedef struct _SECTION_BASIC_INFORMATION {
   LARGE_INTEGER SectionSize;
 } SECTION_BASIC_INFORMATION, *PSECTION_BASIC_INFORMATION;
 
-typedef enum _SECTION_INFORMATION_CLASS {
-  SectionBasicInformation,
-  SectionImageInformation,
-  SectionRelocationInformation, // name:wow64:whNtQuerySection_SectionRelocationInformation
-  MaxSectionInfoClass
-} SECTION_INFORMATION_CLASS;
-
-extern NTSTATUS NTAPI NtQuerySection(
-    IN HANDLE SectionHandle, IN SECTION_INFORMATION_CLASS InformationClass,
-    OUT PVOID InformationBuffer, IN ULONG InformationBufferSize,
-    OUT PULONG ResultLength OPTIONAL);
-
-extern NTSTATUS NTAPI NtExtendSection(IN HANDLE SectionHandle,
-                                      IN PLARGE_INTEGER NewSectionSize);
-
-typedef enum _SECTION_INHERIT { ViewShare = 1, ViewUnmap = 2 } SECTION_INHERIT;
-
 extern NTSTATUS NTAPI NtMapViewOfSection(
     IN HANDLE SectionHandle, IN HANDLE ProcessHandle, IN OUT PVOID *BaseAddress,
     IN ULONG_PTR ZeroBits, IN SIZE_T CommitSize,
@@ -324,12 +307,13 @@ MDBX_INTERNAL_FUNC int mdbx_asprintf(char **strp, const char *fmt, ...) {
 #ifndef mdbx_memalign_alloc
 MDBX_INTERNAL_FUNC int mdbx_memalign_alloc(size_t alignment, size_t bytes,
                                            void **result) {
+  assert(is_powerof2(alignment) && alignment >= sizeof(void *));
 #if defined(_WIN32) || defined(_WIN64)
   (void)alignment;
   *result = VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
   return *result ? MDBX_SUCCESS : MDBX_ENOMEM /* ERROR_OUTOFMEMORY */;
 #elif defined(_ISOC11_SOURCE)
-  *result = aligned_alloc(alignment, bytes);
+  *result = aligned_alloc(alignment, roundup_powerof2(bytes, alignment));
   return *result ? MDBX_SUCCESS : errno;
 #elif _POSIX_VERSION >= 200112L
   *result = nullptr;
@@ -1004,6 +988,9 @@ static int mdbx_check_fs_local(mdbx_filehandle_t handle, int flags) {
      return 0;
 
 #if defined(_WIN32) || defined(_WIN64)
+  if (mdbx_RunningUnderWine() && !(flags & MDBX_EXCLUSIVE))
+    return ERROR_NOT_CAPABLE /* workaround for Wine */;
+
   if (GetFileType(handle) != FILE_TYPE_DISK)
     return ERROR_FILE_OFFLINE;
 
@@ -1316,7 +1303,8 @@ MDBX_INTERNAL_FUNC int mdbx_mmap(const int flags, mdbx_mmap_t *map,
   if (!NT_SUCCESS(err))
     return ntstatus2errcode(err);
 
-  SIZE_T ViewSize = (flags & MDBX_RDONLY) ? 0 : limit;
+  SIZE_T ViewSize =
+      (flags & MDBX_RDONLY) ? 0 : mdbx_RunningUnderWine() ? size : limit;
   err = NtMapViewOfSection(
       map->section, GetCurrentProcess(), &map->address,
       /* ZeroBits */ 0,
@@ -1418,8 +1406,10 @@ MDBX_INTERNAL_FUNC int mdbx_mresize(int flags, mdbx_mmap_t *map, size_t size,
 
   if (!(flags & MDBX_RDONLY) && limit == map->limit && size > map->current) {
     /* growth rw-section */
+    if (!mdbx_NtExtendSection)
+      return ERROR_CALL_NOT_IMPLEMENTED /* workaround for Wine */;
     SectionSize.QuadPart = size;
-    status = NtExtendSection(map->section, &SectionSize);
+    status = mdbx_NtExtendSection(map->section, &SectionSize);
     if (!NT_SUCCESS(status))
       return ntstatus2errcode(status);
     map->current = size;
@@ -1809,18 +1799,18 @@ static uint64_t windows_bootime(void) {
   return 0;
 }
 
-typedef LSTATUS (APIENTRY *pfnRegGetValueW)(HKEY, LPCWSTR, LPCWSTR, DWORD, LPDWORD, PVOID, LPDWORD);
-static pfnRegGetValueW fnRegGetValueW = nullptr;
+typedef LSTATUS (APIENTRY *pfnRegGetValueA)(HKEY, LPCSTR, LPCSTR, DWORD, LPDWORD, PVOID, LPDWORD);
+static pfnRegGetValueA fnRegGetValueA = nullptr;
 
-static LSTATUS APIENTRY stubRegGetValueW(HKEY hkey, LPCWSTR lpSubKey, LPCWSTR lpValue, DWORD dwFlags, LPDWORD pdwType, PVOID pvData, LPDWORD pcbData)
+static LSTATUS APIENTRY stubRegGetValueA(HKEY hkey, LPCSTR lpSubKey, LPCSTR lpValue, DWORD dwFlags, LPDWORD pdwType, PVOID pvData, LPDWORD pcbData)
 {
    HKEY tmp;
-   LSTATUS rc = RegOpenKeyW(hkey, lpSubKey, &tmp);
+   LSTATUS rc = RegOpenKeyA(hkey, lpSubKey, &tmp);
    if (rc != 0)
       return rc;
 
    DWORD dwType = (dwFlags == RRF_RT_ANY) ? REG_SZ : REG_DWORD;
-   rc = RegQueryValueExW(tmp, lpValue, 0, &dwType, pvData, pcbData);
+   rc = RegQueryValueExA(tmp, lpValue, 0, &dwType, pvData, pcbData);
    if (rc != 0 && dwFlags == RRF_RT_DWORD) {
       rc = 0;
       *(DWORD *)pvData = 0xBABAEBA;
@@ -1830,25 +1820,26 @@ static LSTATUS APIENTRY stubRegGetValueW(HKEY hkey, LPCWSTR lpSubKey, LPCWSTR lp
    return rc;
 }
 
-static LSTATUS mdbx_RegGetValue(HKEY hkey, LPCWSTR lpSubKey, LPCWSTR lpValue,
+static LSTATUS mdbx_RegGetValue(HKEY hkey, LPCSTR lpSubKey, LPCSTR lpValue,
                                 DWORD dwFlags, LPDWORD pdwType, PVOID pvData,
                                 LPDWORD pcbData) {
-  if (fnRegGetValueW == nullptr) {
-    fnRegGetValueW = (pfnRegGetValueW)GetProcAddress(GetModuleHandleA("advapi32.dll"), "RegGetValueW");
-    if (fnRegGetValueW == nullptr)
-      fnRegGetValueW = stubRegGetValueW;
+  if (fnRegGetValueA == nullptr) {
+    fnRegGetValueA = (pfnRegGetValueA)GetProcAddress(GetModuleHandleA("advapi32.dll"), "RegGetValueA");
+    if (fnRegGetValueA == nullptr)
+      fnRegGetValueA = stubRegGetValueA;
   }
 
-  LSTATUS rc = fnRegGetValueW(hkey, lpSubKey, lpValue, dwFlags, pdwType, pvData, pcbData);
+  LSTATUS rc =
+      fnRegGetValueA(hkey, lpSubKey, lpValue, dwFlags, pdwType, pvData, pcbData);
   if (rc != ERROR_FILE_NOT_FOUND)
     return rc;
 
-  rc = fnRegGetValueW(hkey, lpSubKey, lpValue,
+  rc = fnRegGetValueA(hkey, lpSubKey, lpValue,
                     dwFlags | 0x00010000 /* RRF_SUBKEY_WOW6464KEY */, pdwType,
                     pvData, pcbData);
   if (rc != ERROR_FILE_NOT_FOUND)
     return rc;
-  return fnRegGetValueW(hkey, lpSubKey, lpValue,
+  return fnRegGetValueA(hkey, lpSubKey, lpValue,
                       dwFlags | 0x00020000 /* RRF_SUBKEY_WOW6432KEY */, pdwType,
                       pvData, pcbData);
 }
@@ -1961,30 +1952,30 @@ __cold MDBX_INTERNAL_FUNC bin128_t mdbx_osal_bootid(void) {
       char DigitalProductId[248];
     } buf;
 
-    static const wchar_t HKLM_MicrosoftCryptography[] =
-        L"SOFTWARE\\Microsoft\\Cryptography";
+    static const char HKLM_MicrosoftCryptography[] =
+        "SOFTWARE\\Microsoft\\Cryptography";
     DWORD len = sizeof(buf);
     /* Windows is madness and must die */
     if (mdbx_RegGetValue(HKEY_LOCAL_MACHINE, HKLM_MicrosoftCryptography,
-                         L"MachineGuid", RRF_RT_ANY, NULL, &buf.MachineGuid,
+                         "MachineGuid", RRF_RT_ANY, NULL, &buf.MachineGuid,
                          &len) == ERROR_SUCCESS &&
         len > 42 && len < sizeof(buf))
       got_machineid = bootid_parse_uuid(&bin, &buf.MachineGuid, len);
 
     if (!got_machineid) {
       /* again, Windows is madness */
-      static const wchar_t HKLM_WindowsNT[] =
-          L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
-      static const wchar_t HKLM_WindowsNT_DPK[] =
-          L"SOFTWARE\\Microsoft\\Windows "
-          L"NT\\CurrentVersion\\DefaultProductKey";
-      static const wchar_t HKLM_WindowsNT_DPK2[] =
-          L"SOFTWARE\\Microsoft\\Windows "
-          L"NT\\CurrentVersion\\DefaultProductKey2";
+      static const char HKLM_WindowsNT[] =
+          "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+      static const char HKLM_WindowsNT_DPK[] =
+          "SOFTWARE\\Microsoft\\Windows "
+          "NT\\CurrentVersion\\DefaultProductKey";
+      static const char HKLM_WindowsNT_DPK2[] =
+          "SOFTWARE\\Microsoft\\Windows "
+          "NT\\CurrentVersion\\DefaultProductKey2";
 
       len = sizeof(buf);
       if (mdbx_RegGetValue(HKEY_LOCAL_MACHINE, HKLM_WindowsNT,
-                           L"DigitalProductId", RRF_RT_ANY, NULL,
+                           "DigitalProductId", RRF_RT_ANY, NULL,
                            &buf.DigitalProductId, &len) == ERROR_SUCCESS &&
           len > 42 && len < sizeof(buf)) {
         bootid_collect(&bin, &buf.DigitalProductId, len);
@@ -1992,7 +1983,7 @@ __cold MDBX_INTERNAL_FUNC bin128_t mdbx_osal_bootid(void) {
       }
       len = sizeof(buf);
       if (mdbx_RegGetValue(HKEY_LOCAL_MACHINE, HKLM_WindowsNT_DPK,
-                           L"DigitalProductId", RRF_RT_ANY, NULL,
+                           "DigitalProductId", RRF_RT_ANY, NULL,
                            &buf.DigitalProductId, &len) == ERROR_SUCCESS &&
           len > 42 && len < sizeof(buf)) {
         bootid_collect(&bin, &buf.DigitalProductId, len);
@@ -2000,7 +1991,7 @@ __cold MDBX_INTERNAL_FUNC bin128_t mdbx_osal_bootid(void) {
       }
       len = sizeof(buf);
       if (mdbx_RegGetValue(HKEY_LOCAL_MACHINE, HKLM_WindowsNT_DPK2,
-                           L"DigitalProductId", RRF_RT_ANY, NULL,
+                           "DigitalProductId", RRF_RT_ANY, NULL,
                            &buf.DigitalProductId, &len) == ERROR_SUCCESS &&
           len > 42 && len < sizeof(buf)) {
         bootid_collect(&bin, &buf.DigitalProductId, len);
@@ -2008,11 +1999,11 @@ __cold MDBX_INTERNAL_FUNC bin128_t mdbx_osal_bootid(void) {
       }
     }
 
-    static const wchar_t HKLM_PrefetcherParams[] =
-        L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory "
-        L"Management\\PrefetchParameters";
+    static const char HKLM_PrefetcherParams[] =
+        "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory "
+        "Management\\PrefetchParameters";
     len = sizeof(buf);
-    if (mdbx_RegGetValue(HKEY_LOCAL_MACHINE, HKLM_PrefetcherParams, L"BootId",
+    if (mdbx_RegGetValue(HKEY_LOCAL_MACHINE, HKLM_PrefetcherParams, "BootId",
                          RRF_RT_DWORD, NULL, &buf.BootId,
                          &len) == ERROR_SUCCESS &&
         len > 1 && len < sizeof(buf)) {
@@ -2021,7 +2012,7 @@ __cold MDBX_INTERNAL_FUNC bin128_t mdbx_osal_bootid(void) {
     }
 
     len = sizeof(buf);
-    if (mdbx_RegGetValue(HKEY_LOCAL_MACHINE, HKLM_PrefetcherParams, L"BaseTime",
+    if (mdbx_RegGetValue(HKEY_LOCAL_MACHINE, HKLM_PrefetcherParams, "BaseTime",
                          RRF_RT_DWORD, NULL, &buf.BaseTime,
                          &len) == ERROR_SUCCESS &&
         len >= sizeof(buf.BaseTime) && buf.BaseTime) {

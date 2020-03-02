@@ -118,10 +118,8 @@
 #       define __noinline __attribute__((__noinline__))
 #   elif defined(_MSC_VER)
 #       define __noinline __declspec(noinline)
-#   elif defined(__SUNPRO_C) || defined(__sun) || defined(sun)
-#       define __noinline inline
-#   elif !defined(__INTEL_COMPILER)
-#       define __noinline /* FIXME ? */
+#   else
+#       define __noinline
 #   endif
 #endif /* __noinline */
 
@@ -142,33 +140,33 @@
 #endif /* __maybe_unused */
 
 #if !defined(__noop) && !defined(_MSC_VER)
-#		define __noop(...) do {} while(0)
+#   define __noop(...) do {} while(0)
 #endif /* __noop */
 
 #ifndef __fallthrough
-#	if __GNUC_PREREQ(7, 0) || __has_attribute(__fallthrough__)
-#		define __fallthrough __attribute__((__fallthrough__))
-#	else
-#		define __fallthrough __noop()
-#	endif
+#   if __GNUC_PREREQ(7, 0) || __has_attribute(__fallthrough__)
+#       define __fallthrough __attribute__((__fallthrough__))
+#   else
+#       define __fallthrough __noop()
+#   endif
 #endif /* __fallthrough */
 
 #ifndef __unreachable
-#	if __GNUC_PREREQ(4,5) || __has_builtin(__builtin_unreachable)
-#		define __unreachable() __builtin_unreachable()
-#	elif defined(_MSC_VER)
-#		define __unreachable() __assume(0)
-#	else
-#		define __unreachable() __noop()
-#	endif
+#   if __GNUC_PREREQ(4,5) || __has_builtin(__builtin_unreachable)
+#       define __unreachable() __builtin_unreachable()
+#   elif defined(_MSC_VER)
+#       define __unreachable() __assume(0)
+#   else
+#       define __unreachable() __noop()
+#   endif
 #endif /* __unreachable */
 
 #ifndef __prefetch
-#	if defined(__GNUC__) || defined(__clang__)
-#		define __prefetch(ptr) __builtin_prefetch(ptr)
-#	else
-#		define __prefetch(ptr) __noop(ptr)
-#	endif
+#   if defined(__GNUC__) || defined(__clang__) || __has_builtin(__builtin_prefetch)
+#       define __prefetch(ptr) __builtin_prefetch(ptr)
+#   else
+#       define __prefetch(ptr) __noop(ptr)
+#   endif
 #endif /* __prefetch */
 
 #ifndef __noreturn
@@ -237,15 +235,13 @@
 
 #ifndef __optimize
 #   if defined(__OPTIMIZE__)
-#     if defined(__clang__) && !__has_attribute(__optimize__)
-#           define __optimize(ops)
-#       elif defined(__GNUC__) || __has_attribute(__optimize__)
+#       if (defined(__GNUC__) && !defined(__clang__)) || __has_attribute(__optimize__)
 #           define __optimize(ops) __attribute__((__optimize__(ops)))
 #       else
 #           define __optimize(ops)
 #       endif
 #   else
-#           define __optimize(ops)
+#       define __optimize(ops)
 #   endif
 #endif /* __optimize */
 
@@ -309,21 +305,10 @@
 #   endif
 #endif /* unlikely */
 
-/* Workaround for Coverity Scan */
-#if defined(__COVERITY__) && __GNUC_PREREQ(7, 0) && !defined(__cplusplus)
-typedef float _Float32;
-typedef double _Float32x;
-typedef double _Float64;
-typedef long double _Float64x;
-typedef float _Float128 __attribute__((__mode__(__TF__)));
-typedef __complex__ float __cfloat128 __attribute__ ((__mode__ (__TC__)));
-typedef _Complex float __cfloat128 __attribute__ ((__mode__ (__TC__)));
-#endif /* Workaround for Coverity Scan */
-
 #ifndef __printf_args
 #   if defined(__GNUC__) || __has_attribute(__format__)
 #       define __printf_args(format_index, first_arg)                          \
-            __attribute__((__format__(printf, format_index, first_arg)))
+            __attribute__((__format__(__printf__, format_index, first_arg)))
 #   else
 #       define __printf_args(format_index, first_arg)
 #   endif
