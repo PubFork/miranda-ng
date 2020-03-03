@@ -1198,13 +1198,14 @@ void CJabberProto::OnProcessMessage(const TiXmlElement *node, ThreadData *info)
 			nPacketId = JabberGetPacketID(node);
 		if (nPacketId != -1)
 			ProtoBroadcastAck(hContact, ACKTYPE_MESSAGE, ACKRESULT_SUCCESS, (HANDLE)nPacketId);
+
+		if (g_plugin.bMessageState)
+			CallService(MS_MESSAGESTATE_UPDATE, hContact, MRD_TYPE_DELIVERED);
 	}
 
 	if (auto *n = XmlGetChildByTag(node, "displayed", "xmlns", JABBER_FEAT_CHAT_MARKERS))
-		if (g_plugin.bMessageState) {
-			MessageReadData readData(time(0), MRD_TYPE_READTIME);
-			CallService(MS_MESSAGESTATE_UPDATE, hContact, (LPARAM)&readData);
-		}
+		if (g_plugin.bMessageState)
+			CallService(MS_MESSAGESTATE_UPDATE, hContact, MRD_TYPE_READ);
 
 	JabberReadXep203delay(node, msgTime);
 
@@ -1431,14 +1432,11 @@ void CJabberProto::OnProcessPresenceCapabilites(const TiXmlElement *node, pResou
 	if (szHash == nullptr) { // old version
 		BYTE hashOut[MIR_SHA1_HASH_SIZE];
 		mir_sha1_hash((BYTE*)szVer, mir_strlen(szVer), hashOut);
-		char szHashOut[MIR_SHA1_HASH_SIZE * 2 + 1];
-		bin2hex(hashOut, _countof(hashOut), szHashOut);
-		r->m_pCaps = m_clientCapsManager.GetPartialCaps(szNode, szHashOut);
-		if (r->m_pCaps == nullptr)
-			GetCachedCaps(szNode, szHashOut, r);
 
+		char szHashOut[MIR_SHA1_HASH_SIZE*2 + 1];
+		r->m_pCaps = g_clientCapsManager.GetPartialCaps(szNode, bin2hex(hashOut, _countof(hashOut), szHashOut));
 		if (r->m_pCaps == nullptr) {
-			r->m_pCaps = m_clientCapsManager.SetClientCaps(szNode, szHashOut, szVer, JABBER_RESOURCE_CAPS_UNINIT);
+			r->m_pCaps = g_clientCapsManager.SetClientCaps(szNode, szHashOut, szVer, JABBER_RESOURCE_CAPS_UNINIT);
 			RequestOldCapsInfo(r, from);
 		}
 
@@ -1447,12 +1445,9 @@ void CJabberProto::OnProcessPresenceCapabilites(const TiXmlElement *node, pResou
 			UpdateMirVer(hContact, r);
 	}
 	else {
-		r->m_pCaps = m_clientCapsManager.GetPartialCaps(szNode, szVer);
-		if (r->m_pCaps == nullptr)
-			GetCachedCaps(szNode, szVer, r);
-
+		r->m_pCaps = g_clientCapsManager.GetPartialCaps(szNode, szVer);
 		if (r->m_pCaps == nullptr) {
-			r->m_pCaps = m_clientCapsManager.SetClientCaps(szNode, szVer, "", JABBER_RESOURCE_CAPS_UNINIT);
+			r->m_pCaps = g_clientCapsManager.SetClientCaps(szNode, szVer, "", JABBER_RESOURCE_CAPS_UNINIT);
 			GetResourceCapabilities(from, r);
 		}
 	}
