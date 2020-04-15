@@ -47,6 +47,7 @@ Boston, MA 02111-1307, USA.
 #include "m_fontservice.h"
 #include "m_text.h"
 #include "m_contacts.h"
+#include "m_srmm_int.h"
 
 #include "m_smileyadd.h"
 #ifndef MTEXT_NOHELPERS
@@ -61,7 +62,6 @@ Boston, MA 02111-1307, USA.
 #define MODULETITLE "NewStory"
 
 #include "utils.h"
-#include "options.h"
 #include "fonts.h"
 #include "calendartool.h"
 #include "history.h"
@@ -69,8 +69,12 @@ Boston, MA 02111-1307, USA.
 #include "history_control.h"
 #include "templates.h"
 
+int OptionsInitialize(WPARAM, LPARAM);
+
 struct CMPlugin : public PLUGIN<CMPlugin>
 {
+	HANDLE m_log;
+
 	CMPlugin();
 
 	int Load() override;
