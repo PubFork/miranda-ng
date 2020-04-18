@@ -417,7 +417,8 @@ public:
 	void OnReceiveGateway(NETLIBHTTPREQUEST*, AsyncHttpRequest*);
 	void OnReceiveMarkRead(NETLIBHTTPREQUEST *, AsyncHttpRequest *);
 	void OnReceiveMessageAck(NETLIBHTTPREQUEST*, AsyncHttpRequest*);
-	void OnReceiveToken(NETLIBHTTPREQUEST*, AsyncHttpRequest*);
+	void OnReceiveToken(NETLIBHTTPREQUEST *, AsyncHttpRequest *);
+	void OnReceiveUserinfo(NETLIBHTTPREQUEST *, AsyncHttpRequest *);
 
 	void RetrieveMyInfo();
 	void OnReceiveMyInfo(NETLIBHTTPREQUEST*, AsyncHttpRequest*);
