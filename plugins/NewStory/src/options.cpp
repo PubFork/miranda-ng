@@ -1,8 +1,31 @@
 #include "stdafx.h"
 
-// Option dialog
+/////////////////////////////////////////////////////////////////////////////////////////
+// General options dialog
 
-class COptionsDlg : public CDlgBase
+class CGeneralOptsDlg : public CDlgBase
+{
+	CCtrlCheck chkGrouping;
+
+public:
+	CGeneralOptsDlg() :
+		CDlgBase(g_plugin, IDD_OPT_ADVANCED),
+		chkGrouping(this, IDC_GROUPING)
+	{
+		CreateLink(chkGrouping, g_bOptGrouping);
+	}
+
+	bool OnApply() override
+	{
+		g_plugin.bMsgGrouping = g_bOptGrouping;
+		return true;
+	}
+};
+
+/////////////////////////////////////////////////////////////////////////////////////////
+// Template options dialog
+
+class CTemplateOptsDlg : public CDlgBase
 {
 	TemplateInfo *m_curr = 0;
 
@@ -10,7 +33,7 @@ class COptionsDlg : public CDlgBase
 	{
 		replaceStrW(m_curr->tmpValue, m_edit.GetText());
 
-		HistoryArray::ItemData item;
+		ItemData item;
 		item.hContact = db_find_first();
 		while (item.hContact && !item.hEvent) {
 			item.hEvent = db_event_first(item.hContact);
@@ -19,7 +42,7 @@ class COptionsDlg : public CDlgBase
 		}
 
 		if (item.hContact && item.hEvent) {
-			item.load(ELM_DATA);
+			item.load(ItemData::ELM_DATA);
 			
 			ptrW wszText(TplFormatStringEx(int(m_curr-templates), m_curr->tmpValue, item.hContact, &item));
 			preview.SetText(wszText);
@@ -33,25 +56,27 @@ class COptionsDlg : public CDlgBase
 
 	CCtrlBase preview, gpreview;
 	CCtrlEdit m_edit;
-	CCtrlMButton btnDiscard, btnPreview, bthVarHelp;
+	CCtrlMButton btnDiscard, btnPreview, bthVarHelp, btnReset;
 	CCtrlTreeView m_tree;
 
 public:
-	COptionsDlg() :
+	CTemplateOptsDlg() :
 		CDlgBase(g_plugin, IDD_OPT_TEMPLATES),
 		m_edit(this, IDC_EDITTEMPLATE),
 		m_tree(this, IDC_TEMPLATES),
 		preview(this, IDC_PREVIEW),
 		gpreview(this, IDC_GPREVIEW),
+		btnReset(this, IDC_RESET, Skin_LoadIcon(SKINICON_OTHER_UNDO), LPGEN("Reset to default")),
 		btnDiscard(this, IDC_DISCARD, g_plugin.getIcon(ICO_RESET), LPGEN("Cancel edit")),
-		bthVarHelp(this, IDC_VARHELP, g_plugin.getIcon(ICO_VARHELP), LPGEN("Help on variables")),
+		bthVarHelp(this, IDC_VARHELP, g_plugin.getIcon(ICO_VARHELP), LPGEN("Variables help")),
 		btnPreview(this, IDC_UPDATEPREVIEW, g_plugin.getIcon(ICO_PREVIEW), LPGEN("Update preview"))
 	{
-		btnDiscard.OnClick = Callback(this, &COptionsDlg::onClick_Discard);
-		btnPreview.OnClick = Callback(this, &COptionsDlg::UpdatePreview);
-		bthVarHelp.OnClick = Callback(this, &COptionsDlg::onVarHelp);
+		btnReset.OnClick = Callback(this, &CTemplateOptsDlg::onClick_Reset);
+		btnDiscard.OnClick = Callback(this, &CTemplateOptsDlg::onClick_Discard);
+		btnPreview.OnClick = Callback(this, &CTemplateOptsDlg::UpdatePreview);
+		bthVarHelp.OnClick = Callback(this, &CTemplateOptsDlg::onVarHelp);
 
-		m_tree.OnSelChanged = Callback(this, &COptionsDlg::onSelChanged);
+		m_tree.OnSelChanged = Callback(this, &CTemplateOptsDlg::onSelChanged);
 	}
 
 	bool OnInitDialog() override
@@ -102,6 +127,9 @@ public:
 
 	bool OnApply() override
 	{
+		if (m_curr != nullptr)
+			replaceStrW(m_curr->tmpValue, m_edit.GetText());
+
 		for (auto &it : templates) {
 			if (it.tmpValue) {
 				replaceStrW(it.value, it.tmpValue);
@@ -116,6 +144,19 @@ public:
 	{
 		for (auto &it : templates)
 			replaceStrW(it.tmpValue, nullptr);
+	}
+
+	void onClick_Reset(CCtrlButton *)
+	{
+		for (auto &it : templates) {
+			replaceStrW(it.tmpValue, nullptr);
+			replaceStrW(it.value, nullptr);
+		}
+
+		if (m_curr)
+			m_edit.SetText(m_curr->defvalue);
+		UpdatePreview(0);
+		NotifyChange();
 	}
 
 	void onClick_Discard(CCtrlButton *)
@@ -134,10 +175,10 @@ public:
 	{
 		CMStringW wszVarHelp;
 		wszVarHelp.Format(L"%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s\n%s - %s",
-			L"%", TranslateT("simply % character"),
-			L"%n", TranslateT("line break"),
-			L"%S", TranslateT("my nick"),
-			L"%N", TranslateT("buddy\'s nick"),
+			L"%%", TranslateT("simply % character"),
+			L"%n", TranslateT("a \"hard\" line break (cr/lf - will break indent)"),
+			L"%S", TranslateT("my nickname"),
+			L"%N", TranslateT("buddy\'s nickname"),
 			L"%c", TranslateT("event count"),
 			L"%I", TranslateT("icon"),
 			L"%i", TranslateT("direction icon"),
@@ -149,9 +190,9 @@ public:
 			L"%s", TranslateT("second"),
 			L"%o", TranslateT("month"),
 			L"%d", TranslateT("day of month"),
-			L"%y", TranslateT("year"),
+			L"%y", TranslateT("year (4 digits)"),
 			L"%w", TranslateT("day of week (Sunday, Monday... translatable)"),
-			L"%p", TranslateT("am/pm symbol"),
+			L"%p", TranslateT("AM/PM symbol"),
 			L"%O", TranslateT("name of month, translatable"),
 			L"%M", TranslateT("the message string itself"));
 		MessageBox(m_hwnd, wszVarHelp, TranslateT("Variables help"), MB_OK);
@@ -212,7 +253,11 @@ int OptionsInitialize(WPARAM wParam, LPARAM)
 	odp.flags = ODPF_BOLDGROUPS;
 
 	odp.szTab.a = LPGEN("Templates");
-	odp.pDialog = new COptionsDlg();
+	odp.pDialog = new CTemplateOptsDlg();
+	g_plugin.addOptions(wParam, &odp);
+
+	odp.szTab.a = LPGEN("Advanced");
+	odp.pDialog = new CGeneralOptsDlg();
 	g_plugin.addOptions(wParam, &odp);
 	return 0;
 }

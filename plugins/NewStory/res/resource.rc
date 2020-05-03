@@ -26,29 +26,51 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
-ICO_NEWSTORY                       ICON         "01 newstory.ico"
-ICO_USERINFO                       ICON         "02 userinfo.ico"
-ICO_USERMENU                       ICON         "03 usermenu.ico"
-ICO_SEARCH                       ICON         "04 search.ico"
-ICO_OPTIONS                       ICON         "05 options.ico"
-ICO_FILTER                       ICON         "06 filter.ico"
-ICO_EXPORT                       ICON         "07 export.ico"
-ICO_COPY                       ICON         "09 copy.ico"
-ICO_SENDMSG                       ICON         "10 sendmsg.ico"
-ICO_MSGIN                      ICON         "12 msgin.ico"
-ICO_MSGOUT                      ICON         "13 msgout.ico"
-ICO_SIGNIN                      ICON         "14 signin.ico"
-ICO_FILE                      ICON         "16 file.ico"
-ICO_URL                      ICON         "17 url.ico"
-ICO_UNKNOWN                      ICON         "18 unknown.ico"
-ICO_FINDPREV                      ICON         "19 findprev.ico"
-ICO_FINDNEXT                      ICON         "20 findnext.ico"
-ICO_CALENDAR                      ICON         "Calendar.ico"
-ICO_RESET                      ICON         "reset.ico"
-ICO_PREVIEW                      ICON         "reload.ico"
-ICO_VARHELP                      ICON         "vars.ico"
-ICO_TPLGROUP                      ICON         "folder.ico"
-/////////////////////////////////////////////////////////////////////////////
+ICO_NEWSTORY            ICON                    "newstory.ico"
+
+ICO_USERINFO            ICON                    "userinfo.ico"
+
+ICO_USERMENU            ICON                    "usermenu.ico"
+
+ICO_SEARCH              ICON                    "search.ico"
+
+ICO_OPTIONS             ICON                    "options.ico"
+
+ICO_FILTER              ICON                    "filter.ico"
+
+ICO_EXPORT              ICON                    "export.ico"
+
+ICO_COPY                ICON                    "copy.ico"
+
+ICO_SENDMSG             ICON                    "sendmsg.ico"
+
+ICO_MSGIN               ICON                    "msgin.ico"
+
+ICO_MSGOUT              ICON                    "msgout.ico"
+
+ICO_SIGNIN              ICON                    "signin.ico"
+
+ICO_FILE                ICON                    "file.ico"
+
+ICO_URL                 ICON                    "url.ico"
+
+ICO_UNKNOWN             ICON                    "unknown.ico"
+
+ICO_FINDPREV            ICON                    "findprev.ico"
+
+ICO_FINDNEXT            ICON                    "findnext.ico"
+
+ICO_CALENDAR            ICON                    "calendar.ico"
+
+ICO_RESET               ICON                    "reset.ico"
+
+ICO_PREVIEW             ICON                    "reload.ico"
+
+ICO_VARHELP             ICON                    "vars.ico"
+
+ICO_TPLGROUP            ICON                    "folder.ico"
+
+ICO_TIMETREE            ICON                    "timetree.ico"
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -81,43 +103,45 @@ BEGIN
     DEFPUSHBUTTON   "Close",IDCANCEL,167,149,50,17
     EDITTEXT        IDC_USERNICK,28,9,189,12,ES_AUTOHSCROLL | ES_READONLY | NOT WS_BORDER
     ICON            "",IDC_MSGICON,7,7,16,14
-    CONTROL         "Sample text. With smileys: :) :D and hyperlinks: https://www.miranda-ng.org/",IDC_TEXT,
+    CONTROL         "Sample text. With smileys: :) :D and hyperlinks: https://www.miranda-ng.org",IDC_TEXT,
                     "MTextControl",WS_TABSTOP,7,26,210,118
 END
 
 IDD_HISTORY DIALOGEX 0, 0, 380, 319
 STYLE DS_SETFONT | DS_NOIDLEMSG | DS_CENTER | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME
-CAPTION "NewStory - new history for Miranda NG"
+CAPTION ""
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
-    CONTROL         "",IDC_MESSAGE,"MButtonClass",WS_TABSTOP,37,99,16,14
     CONTROL         "",IDC_USERINFO,"MButtonClass",WS_TABSTOP,0,99,16,14
     CONTROL         "",IDC_USERMENU,"MButtonClass",WS_TABSTOP,21,99,16,14
+    CONTROL         "",IDC_MESSAGE,"MButtonClass",WS_TABSTOP,37,99,16,14
     CONTROL         "",IDC_SEARCH,"MButtonClass",WS_TABSTOP,53,99,16,14
-    CONTROL         "",IDC_EXPORT,"MButtonClass",WS_TABSTOP,90,99,16,14
     CONTROL         "",IDC_COPY,"MButtonClass",WS_TABSTOP,74,99,16,14
+    CONTROL         "",IDC_EXPORT,"MButtonClass",WS_TABSTOP,90,99,16,14
+    CONTROL         "",IDC_DELETE,"MButtonClass",WS_TABSTOP,104,99,16,14
+    CONTROL         "",IDC_TIMETREE,"MButtonClass",WS_TABSTOP,118,99,16,14
     CONTROL         "",IDC_FILTER,"MButtonClass",WS_TABSTOP,132,99,16,14
     CONTROL         "",IDC_FINDPREV,"MButtonClass",WS_TABSTOP,364,305,16,14
     CONTROL         "",IDC_FINDNEXT,"MButtonClass",WS_TABSTOP,337,305,16,14
     EDITTEXT        IDC_SEARCHTEXT,19,305,305,14,ES_AUTOHSCROLL
     ICON            "",IDC_SEARCHICON,1,298,20,20,SS_CENTERIMAGE
     CONTROL         "",IDC_LOGOPTIONS,"MButtonClass",WS_TABSTOP,116,99,16,14
-    CONTROL         "Tree1",IDC_TIMETREE,"SysTreeView32",TVS_DISABLEDRAGDROP | TVS_SHOWSELALWAYS | TVS_TRACKSELECT | TVS_FULLROWSELECT | TVS_SINGLEEXPAND | NOT WS_VISIBLE | WS_TABSTOP,0,134,84,160,WS_EX_STATICEDGE
+    CONTROL         "Tree1",IDC_TIMETREEVIEW,"SysTreeView32",TVS_DISABLEDRAGDROP | TVS_SHOWSELALWAYS | TVS_TRACKSELECT | TVS_FULLROWSELECT | TVS_SINGLEEXPAND | NOT WS_VISIBLE | WS_TABSTOP,0,134,84,160,WS_EX_STATICEDGE
     CONTROL         "",IDC_DATEPOPUP,"MButtonClass",WS_TABSTOP,148,99,16,14
     CONTROL         "",IDC_ITEMS2,"NewstoryList",WS_TABSTOP,90,132,290,166
     CONTROL         "",IDC_IB_SEPARATOR,"Static",SS_ETCHEDHORZ,21,76,124,1
     ICON            "",IDC_ICO_MESSAGES,4,7,20,20
     ICON            "",IDC_ICO_FILES,123,7,20,20
     ICON            "",IDC_ICO_TOTAL,279,2,20,20
-    LTEXT           "424356",IDC_TXT_MESSAGES,31,9,25,8,SS_CENTERIMAGE
-    LTEXT           "424356",IDC_TXT_FILES,155,12,25,8,SS_CENTERIMAGE
-    LTEXT           "424356",IDC_TXT_TOTAL,313,11,25,8,SS_CENTERIMAGE
-    LTEXT           "237562",IDC_TXT_MESSAGES_IN,43,39,25,8,SS_CENTERIMAGE
-    LTEXT           "237562",IDC_TXT_FILES_IN,167,41,25,8,SS_CENTERIMAGE
-    LTEXT           "237562",IDC_TXT_TOTAL_IN,325,41,25,8,SS_CENTERIMAGE
-    LTEXT           "237562",IDC_TXT_MESSAGES_OUT,45,52,25,8,SS_CENTERIMAGE
-    LTEXT           "237562",IDC_TXT_FILES_OUT,169,55,25,8,SS_CENTERIMAGE
-    LTEXT           "237562",IDC_TXT_TOTAL_OUT,327,54,25,8,SS_CENTERIMAGE
+    LTEXT           "Messages",IDC_TXT_MESSAGES,31,9,25,8,SS_CENTERIMAGE
+    LTEXT           "Files",IDC_TXT_FILES,155,12,25,8,SS_CENTERIMAGE
+    LTEXT           "Total",IDC_TXT_TOTAL,313,11,25,8,SS_CENTERIMAGE
+    LTEXT           "Incoming",IDC_TXT_MESSAGES_IN,43,39,25,8,SS_CENTERIMAGE
+    LTEXT           "Incoming",IDC_TXT_FILES_IN,167,41,25,8,SS_CENTERIMAGE
+    LTEXT           "Incoming",IDC_TXT_TOTAL_IN,325,41,25,8,SS_CENTERIMAGE
+    LTEXT           "Outgoing",IDC_TXT_MESSAGES_OUT,45,52,25,8,SS_CENTERIMAGE
+    LTEXT           "Outgoing",IDC_TXT_FILES_OUT,169,55,25,8,SS_CENTERIMAGE
+    LTEXT           "Outgoing",IDC_TXT_TOTAL_OUT,327,54,25,8,SS_CENTERIMAGE
     CONTROL         "",IDC_ICO_MESSAGES_IN,"MButtonClass",WS_TABSTOP,17,36,16,14
     CONTROL         "",IDC_ICO_MESSAGES_OUT,"MButtonClass",WS_TABSTOP,17,52,16,14
     CONTROL         "",IDC_ICO_FILES_IN,"MButtonClass",WS_TABSTOP,143,36,16,14
@@ -125,9 +149,9 @@ BEGIN
     CONTROL         "",IDC_ICO_TOTAL_IN,"MButtonClass",WS_TABSTOP,305,36,16,14
     CONTROL         "",IDC_ICO_TOTAL_OUT,"MButtonClass",WS_TABSTOP,305,52,16,14
     ICON            "",IDC_ICO_URLS,205,9,20,20
-    LTEXT           "424356",IDC_TXT_URLS,237,15,25,8,SS_CENTERIMAGE
-    LTEXT           "237562",IDC_TXT_URLS_IN,249,44,25,8,SS_CENTERIMAGE
-    LTEXT           "237562",IDC_TXT_URLS_OUT,251,57,25,8,SS_CENTERIMAGE
+    LTEXT           "URLs",IDC_TXT_URLS,237,15,25,8,SS_CENTERIMAGE
+    LTEXT           "Incoming",IDC_TXT_URLS_IN,249,44,25,8,SS_CENTERIMAGE
+    LTEXT           "Outgoing",IDC_TXT_URLS_OUT,251,57,25,8,SS_CENTERIMAGE
     CONTROL         "",IDC_ICO_URLS_IN,"MButtonClass",WS_TABSTOP,225,38,16,14
     CONTROL         "",IDC_ICO_URLS_OUT,"MButtonClass",WS_TABSTOP,225,54,16,14
     CONTROL         "DateTimePicker1",IDC_DATE_TO,"SysDateTimePick32",DTS_RIGHTALIGN | DTS_UPDOWN | DTS_LONGDATEFORMAT | WS_TABSTOP,246,94,90,15
@@ -141,24 +165,33 @@ STYLE DS_SETFONT | WS_POPUP | WS_BORDER
 EXSTYLE WS_EX_TOOLWINDOW
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
-    CONTROL         "MonthCalendar1",IDC_MONTHCALENDAR1,"SysMonthCal32",MCS_NOTODAYCIRCLE | WS_TABSTOP,0,0,98,85
+    CONTROL         "",IDC_MONTHCALENDAR1,"SysMonthCal32",MCS_NOTODAYCIRCLE | WS_TABSTOP,0,0,98,85
+END
+
+IDD_OPT_ADVANCED DIALOGEX 0, 0, 307, 223
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD
+FONT 8, "MS Shell Dlg", 0, 0, 0x1
+BEGIN
+    CONTROL         "Group messages",IDC_GROUPING,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,9,289,14
+    GROUPBOX        "Log window",IDC_STATIC,0,0,307,29
 END
 
 IDD_OPT_TEMPLATES DIALOGEX 0, 0, 307, 223
 STYLE DS_SETFONT | WS_CHILD
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
+    LTEXT           "Template list:",IDC_STATIC,7,7,140,8
     CONTROL         "Tree1",IDC_TEMPLATES,"SysTreeView32",TVS_DISABLEDRAGDROP | TVS_SHOWSELALWAYS | TVS_FULLROWSELECT | WS_BORDER | WS_TABSTOP,12,20,135,117
     LTEXT           "Edit template:",IDC_STATIC,7,142,293,8
     EDITTEXT        IDC_EDITTEMPLATE,12,155,288,42,ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_WANTRETURN
-    CONTROL         "",IDC_VARHELP,"MButtonClass",WS_DISABLED | WS_TABSTOP,284,202,16,14
-    EDITTEXT        IDC_PREVIEW,162,20,138,42,ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY
-    LTEXT           "Template list:",IDC_STATIC,7,7,140,8
     LTEXT           "Text preview:",IDC_STATIC,157,7,143,8
-    CONTROL         "",IDC_DISCARD,"MButtonClass",WS_TABSTOP,252,202,16,14
+    EDITTEXT        IDC_PREVIEW,162,20,138,42,ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY
     LTEXT           "Graphic preview:",IDC_STATIC,157,67,143,8
     CONTROL         "",IDC_GPREVIEW,"MTextControl",WS_TABSTOP,162,80,138,57
-    CONTROL         "",IDC_UPDATEPREVIEW,"MButtonClass",WS_TABSTOP,268,202,16,14
+    CONTROL         "",IDC_RESET,"MButtonClass",WS_TABSTOP,230,202,16,16
+    CONTROL         "",IDC_DISCARD,"MButtonClass",WS_TABSTOP,248,202,16,16
+    CONTROL         "",IDC_UPDATEPREVIEW,"MButtonClass",WS_TABSTOP,266,202,16,16
+    CONTROL         "",IDC_VARHELP,"MButtonClass",WS_DISABLED | WS_TABSTOP,284,202,16,16
 END
 
 IDD_FILTERMODE DIALOGEX 0, 0, 219, 171
@@ -241,6 +274,10 @@ BEGIN
     END
 
     IDD_CALENDARTOOL, DIALOG
+    BEGIN
+    END
+
+    IDD_OPT_ADVANCED, DIALOG
     BEGIN
     END
 
@@ -338,12 +375,10 @@ BEGIN
     END
     POPUP "Log options"
     BEGIN
-        MENUITEM "Show time tree",              ID_LOGOPTIONS_SHOWTIMETREE
-        MENUITEM SEPARATOR
         MENUITEM "Options...",                  ID_LOGOPTIONS_OPTIONS
         MENUITEM "Templates...",                ID_LOGOPTIONS_TEMPLATES
     END
-    POPUP "Context"
+    POPUP ""
     BEGIN
         MENUITEM "Cancel",                      ID_CONTEXT_CANCEL
         MENUITEM SEPARATOR
@@ -400,6 +435,11 @@ END
 //
 
 IDD_SEARCH AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
+IDD_OPT_ADVANCED AFX_DIALOG_LAYOUT
 BEGIN
     0
 END

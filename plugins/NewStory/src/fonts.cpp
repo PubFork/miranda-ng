@@ -1,42 +1,45 @@
 #include "stdafx.h"
 
-MyColourID colors[] =
+MyColourID g_colorTable[COLOR_COUNT] =
 {
-	{ "Incoming Messages",     "ColorMsgIn",   RGB(0xd6, 0xf5, 0xc0) },
-	{ "Outgoing Messages",     "ColorMsgOut",  RGB(0xf5, 0xe7, 0xd8) },
+	{ "Incoming messages",     "ColorMsgIn",   RGB(0xd6, 0xf5, 0xc0) },
+	{ "Outgoing messages",     "ColorMsgOut",  RGB(0xf5, 0xe7, 0xd8) },
 
-	{ "Incoming Files",        "ColorFileIn",  RGB(0xe3, 0xee, 0x9b) },
-	{ "Outgoing Files",        "ColorFileOut", RGB(0xe3, 0xee, 0x9b) },
+	{ "Incoming files",        "ColorFileIn",  RGB(0xe3, 0xee, 0x9b) },
+	{ "Outgoing files",        "ColorFileOut", RGB(0xe3, 0xee, 0x9b) },
 
 	{ "Status changes",        "ColorStatus",  RGB(0xf0, 0xf0, 0xf0) },
 
-	{ "Other Outgoing Events", "ColorOut",     RGB(0xff, 0xff, 0xff) },
-	{ "Other Incoming Events", "ColorIn",      RGB(0xff, 0xff, 0xff) },
+	{ "Other incoming events", "ColorIn",      RGB(0xff, 0xff, 0xff) },
+	{ "Other outgoing events", "ColorOut",     RGB(0xff, 0xff, 0xff) },
 
-	{ "Selected Items",        "ColorSel",     RGB(0x60, 0x60, 0x60) },
-	{ "Selected Items (Text)", "ColorSelTxt",  RGB(0xff, 0xff, 0xff) }
+	{ "Selected items",        "ColorSel",     RGB(0x60, 0x60, 0x60) },
+	{ "Selected items (text)", "ColorSelTxt",  RGB(0xff, 0xff, 0xff) }
 };
 
-MyFontID fonts[] =
+MyFontID g_fontTable[FONT_COUNT] =
 {
-	{ "Incoming Messages",     "FontMsgIn"   },
-	{ "Outgoing Messages",     "FontMsgOut"  },
+	{ "Incoming nick",         "FontNickIn",   RGB(0xc8, 0x3f, 0x6b) },
+	{ "Outgoing nick",         "FontNickOut",  RGB(0x08, 0x60, 0xbd) },
 
-	{ "Incoming Files",        "FontFileIn"  },
-	{ "Outgoing Files",        "FontFileOut" },
+	{ "Incoming messages",     "FontMsgIn"   },
+	{ "Outgoing messages",     "FontMsgOut"  },
+
+	{ "Incoming files",        "FontFileIn"  },
+	{ "Outgoing files",        "FontFileOut" },
 
 	{ "Status changes",        "FontStatus"  },
 
-	{ "Other Outgoing Events", "FontOut"     },
-	{ "Other Incoming Events", "FontIn"      }
+	{ "Other incoming events", "FontIn"      },
+	{ "Other outgoing events", "FontOut"     }
 };
 
 int evtFontsChanged(WPARAM, LPARAM)
 {
-	for (auto &it : colors)
+	for (auto &it : g_colorTable)
 		it.cl = Colour_Get(MODULENAME, it.szName);
 
-	for (auto &it : fonts) {
+	for (auto &it : g_fontTable) {
 		it.cl = (COLORREF)Font_Get(MODULENAME, it.szName, &it.lf);
 
 		DeleteObject(it.hfnt);
@@ -58,8 +61,8 @@ void InitFonts()
 	strncpy_s(cid.group, MODULENAME, _TRUNCATE);
 	strncpy_s(cid.dbSettingsGroup, MODULENAME, _TRUNCATE);
 
-	for (auto &it : colors) {
-		cid.order = int(&it - colors);
+	for (auto &it : g_colorTable) {
+		cid.order = int(&it - g_colorTable);
 		strncpy_s(cid.name, it.szName, _TRUNCATE);
 		strncpy_s(cid.setting, it.szSetting, _TRUNCATE);
 		cid.defcolour = it.defaultValue;
@@ -67,14 +70,21 @@ void InitFonts()
 		it.cl = Colour_Get(cid.group, cid.name);
 	}
 
+	LOGFONT lfDefault;
+	SystemParametersInfo(SPI_GETICONTITLELOGFONT, sizeof(lfDefault), &lfDefault, FALSE);
+
 	FontID fontid = {};
+	fontid.flags = FIDF_DEFAULTVALID;
 	strncpy_s(fontid.group, MODULENAME, _TRUNCATE);
 	strncpy_s(fontid.dbSettingsGroup, MODULENAME, _TRUNCATE);
+	strncpy_s(fontid.deffontsettings.szFace, _T2A(lfDefault.lfFaceName), _TRUNCATE);
+	fontid.deffontsettings.size = -12;
 
-	for (auto &it : fonts) {
-		fontid.order = int(&it - fonts);
+	for (auto &it : g_fontTable) {
+		fontid.order = int(&it - g_fontTable);
 		strncpy_s(fontid.name, it.szName, _TRUNCATE);
 		strncpy_s(fontid.setting, it.szSetting, _TRUNCATE);
+		fontid.deffontsettings.colour = it.defaultValue;
 		g_plugin.addFont(&fontid);
 
 		it.cl = Font_Get(MODULENAME, it.szName, &it.lf);
@@ -84,6 +94,6 @@ void InitFonts()
 
 void DestroyFonts()
 {
-	for (auto &it : fonts)
+	for (auto &it : g_fontTable)
 		DeleteObject(it.hfnt);
 }

@@ -521,7 +521,7 @@ AsyncHttpRequest* CIcqProto::UserInfoRequest(MCONTACT hContact)
 	return pReq;
 }
 
-void CIcqProto::RetrieveUserHistory(MCONTACT hContact, __int64 startMsgId, bool bFromHistory)
+void CIcqProto::RetrieveUserHistory(MCONTACT hContact, __int64 startMsgId)
 {
 	if (startMsgId == 0)
 		startMsgId = -1;
@@ -531,7 +531,6 @@ void CIcqProto::RetrieveUserHistory(MCONTACT hContact, __int64 startMsgId, bool 
 		pReq->flags |= NLHRF_NODUMPSEND;
 	#endif
 	pReq->hContact = hContact;
-	pReq->pUserInfo = (bFromHistory) ? pReq : nullptr;
 
 	__int64 patchVer = getId(hContact, DB_KEY_PATCHVER);
 	if (patchVer == 0)
@@ -562,8 +561,11 @@ void CIcqProto::SetServerStatus(int iStatus)
 	Push(new AsyncHttpRequest(CONN_MAIN, REQUEST_GET, ICQ_API_SERVER "/presence/setState")
 		<< AIMSID(this) << CHAR_PARAM("view", szStatus) << INT_PARAM("invisible", invisible));
 
-	if (iStatus == ID_STATUS_OFFLINE)
-		Push(new AsyncHttpRequest(CONN_MAIN, REQUEST_GET, ICQ_API_SERVER "/aim/endSession", &CIcqProto::OnSessionEnd) << AIMSID(this));
+	if (iStatus == ID_STATUS_OFFLINE && !getByte(DB_KEY_PHONEREG)) {
+		auto *pReq = new AsyncHttpRequest(CONN_MAIN, REQUEST_GET, ICQ_API_SERVER "/aim/endSession", &CIcqProto::OnSessionEnd);
+		pReq << AIMSID(this) << INT_PARAM("invalidateToken", 1);
+		Push(pReq);
+	}
 
 	int iOldStatus = m_iStatus; m_iStatus = iStatus;
 	ProtoBroadcastAck(0, ACKTYPE_STATUS, ACKRESULT_SUCCESS, (HANDLE)iOldStatus, m_iStatus);
@@ -907,7 +909,7 @@ void CIcqProto::OnGetUserHistory(NETLIBHTTPREQUEST *pReply, AsyncHttpRequest *pR
 
 	auto &results = root.results();
 	for (auto &it : results["messages"])
-		ParseMessage(pReq->hContact, lastMsgId, it, pReq->pUserInfo != nullptr);
+		ParseMessage(pReq->hContact, lastMsgId, it, true);
 
 	setId(pReq->hContact, DB_KEY_LASTMSGID, lastMsgId);
 }

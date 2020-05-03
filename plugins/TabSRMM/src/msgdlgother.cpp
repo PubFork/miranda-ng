@@ -853,6 +853,22 @@ void CMsgDialog::LoadSplitter()
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
+
+void CMsgDialog::LogEvent(DBEVENTINFO &dbei)
+{
+	if (m_iLogMode != 0) {
+		dbei.flags |= DBEF_TEMPORARY;
+
+		MEVENT hDbEvent = db_event_add(m_hContact, &dbei);
+		if (hDbEvent) {
+			m_pLog->LogEvents(hDbEvent, 1, true);
+			db_event_delete(hDbEvent);
+		}
+	}
+	else LOG()->LogEvents(0, 1, true, &dbei);
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
 // draw various elements of the message window, like avatar(s), info panel fields
 // and the color formatting menu
 

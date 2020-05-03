@@ -13,6 +13,8 @@
 
 CMPlugin g_plugin;
 
+CMOption<bool> g_bOptGrouping(MODULENAME, "MessageGrouping", false);
+
 /////////////////////////////////////////////////////////////////////////////////////////
 
 PLUGININFOEX pluginInfoEx =
@@ -62,6 +64,7 @@ static IconItem icons[] =
 	{ LPGEN("Find previous"),     "findprev",  ICO_FINDPREV   },
 	{ LPGEN("Find next"),         "findnext",  ICO_FINDNEXT   },
 	{ LPGEN("Jump to date"),      "calendar",  ICO_CALENDAR   },
+	{ LPGEN("Conversations"),     "timetree",  ICO_TIMETREE   },
 
 	{ LPGEN("Template group"),    "tplgroup",  ICO_TPLGROUP   },
 	{ LPGEN("Reset"),             "reset",     ICO_RESET      },
@@ -101,7 +104,8 @@ static int evtPreShutdown(WPARAM, LPARAM)
 
 int CMPlugin::Load()
 {
-	g_plugin.registerIcon(MODULETITLE, icons);
+	registerIcon(MODULETITLE, icons);
+	bMsgGrouping = g_bOptGrouping;
 
 	m_log = RegisterSrmmLog(MODULETITLE, _T(MODULENAME), NewStory_Stub);
 
