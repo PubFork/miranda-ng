@@ -21,18 +21,20 @@ Boston, MA 02111-1307, USA.
 
 //Windows headers
 #include <windows.h>
+#include <windowsx.h>
 #include <process.h>
 #include <tchar.h>
 #include <commctrl.h>
 #include <time.h>
 #include <Shlwapi.h>
+#include <malloc.h>
 
 //Miranda headers
 #include "newpluginapi.h"
 #include "win2k.h"
 #include "m_chat_int.h"
 #include "m_clc.h"
-#include "m_clist.h"
+#include "m_clistint.h"
 #include "m_options.h"
 #include "m_skin.h"
 #include "m_langpack.h"
@@ -79,7 +81,8 @@ struct CMPlugin : public PLUGIN<CMPlugin>
 {
 	HANDLE m_log;
 
-	bool bMsgGrouping;
+	CMOption<bool> bOptVScroll;
+	bool bMsgGrouping, bDrawEdge; // thesw options are a copy of static CMOption to keep performance high
 
 	CMPlugin();
 
@@ -87,4 +90,5 @@ struct CMPlugin : public PLUGIN<CMPlugin>
 	int Unload() override;
 };
 
-extern CMOption<bool> g_bOptGrouping;
+extern CMOption<bool> g_bOptGrouping, g_bOptDrawEdge;
+extern wchar_t* months[12];

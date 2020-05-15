@@ -15,8 +15,11 @@ static LRESULT CALLBACK HistoryEditWndProc(HWND, UINT, WPARAM, LPARAM);
 struct NewstoryListData : public MZeroedObject
 {
 	NewstoryListData(HWND _1) :
-		hwnd(_1)
-	{}
+		hwnd(_1),
+		redrawTimer(Miranda_GetSystemWindow(), (LPARAM)this)
+	{
+		redrawTimer.OnEvent = Callback(this, &NewstoryListData::OnTimer);
+	}
 
 	HistoryArray items;
 
@@ -33,9 +36,62 @@ struct NewstoryListData : public MZeroedObject
 	HWND hwnd;
 	HWND hwndEditBox;
 
-	void OnContextMenu(int index)
+	CTimer redrawTimer;
+	CSrmmBaseDialog *pMsgDlg = nullptr;
+
+	void OnContextMenu(int index, POINT pt)
 	{
-		ItemData* item = items.get(index, ItemData::ELM_DATA);
+		ItemData* item = items[index];
+		if (item == nullptr)
+			return;
+		
+		HMENU hMenu = LoadMenu(g_plugin.getInst(), MAKEINTRESOURCE(IDR_CONTEXTMENU));
+		TranslateMenu(hMenu);
+
+		HMENU hSubMenu = GetSubMenu(hMenu, 0);
+		UINT ret;
+		if (pMsgDlg != nullptr && pMsgDlg->isChat()) {
+			EnableMenuItem(hSubMenu, 2, MF_BYPOSITION | MF_GRAYED);
+
+			pMsgDlg->m_bInMenu = true;
+			ret = Chat_CreateMenu(hwnd, hSubMenu, pt, pMsgDlg->getChat(), nullptr);
+			pMsgDlg->m_bInMenu = false;
+		}
+		else ret = TrackPopupMenu(hSubMenu, TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, nullptr);
+
+		switch(ret) {
+		case ID_CONTEXT_COPY:
+			SendMessage(hwnd, NSM_COPY, 0, 0);
+			break;
+
+		case ID_CONTEXT_EDIT:
+			BeginEditItem(index);
+			break;
+
+		case ID_CONTEXT_DELETE:
+			break;
+
+		case ID_CONTEXT_SELECTALL:
+			SendMessage(hwnd, NSM_SELECTITEMS, 0, items.getCount() - 1);
+			break;
+
+		default:
+			if (pMsgDlg != nullptr) {
+				PostMessage(pMsgDlg->GetHwnd(), WM_MOUSEACTIVATE, 0, 0);
+				Chat_DoEventHook(pMsgDlg->getChat(), GC_USER_LOGMENU, nullptr, nullptr, ret);
+			}
+		}
+
+		DestroyMenu(hMenu);
+	}
+
+	void OnTimer(CTimer *pTimer)
+	{
+		pTimer->Stop();
+
+		scrollTopItem = items.getCount();
+		FixScrollPosition();
+		InvalidateRect(hwnd, 0, FALSE);
 	}
 
 	void BeginEditItem(int index)
@@ -54,56 +110,12 @@ struct NewstoryListData : public MZeroedObject
 		int itemHeight = LayoutItem(idx);
 		while (top < height) {
 			if (idx == index) {
-				ItemData *item = items.get(index, ItemData::ELM_DATA);
+				ItemData *item = items[index];
 
-				int tpl;
-				int fontid;
-				int colorid;
-				switch (item->dbe.eventType) {
-				case EVENTTYPE_MESSAGE:
-					tpl = TPL_COPY_MESSAGE;
-					fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INMSG : FONT_OUTMSG;
-					colorid = !(item->dbe.flags & DBEF_SENT) ? COLOR_INMSG : COLOR_OUTMSG;
-					break;
+				int fontid, colorid;
+				item->getFontColor(fontid, colorid);
 
-				case EVENTTYPE_FILE:
-					tpl = TPL_COPY_FILE;
-					fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INFILE : FONT_OUTFILE;
-					colorid = !(item->dbe.flags & DBEF_SENT) ? COLOR_INFILE : COLOR_OUTFILE;
-					break;
-
-				case EVENTTYPE_STATUSCHANGE:
-					tpl = TPL_COPY_SIGN;
-					fontid = FONT_STATUS;
-					colorid = COLOR_STATUS;
-					break;
-
-				case EVENTTYPE_AUTHREQUEST:
-					tpl = TPL_COPY_AUTH;
-					fontid = FONT_INOTHER;
-					colorid = COLOR_INOTHER;
-					break;
-
-				case EVENTTYPE_ADDED:
-					tpl = TPL_COPY_ADDED;
-					fontid = FONT_INOTHER;
-					colorid = COLOR_INOTHER;
-					break;
-
-				case EVENTTYPE_JABBER_PRESENCE:
-					tpl = TPL_COPY_PRESENCE;
-					fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INOTHER : FONT_OUTOTHER;
-					colorid = !(item->dbe.flags & DBEF_SENT) ? COLOR_INOTHER : COLOR_OUTOTHER;
-					break;
-
-				default:
-					tpl = TPL_COPY_OTHER;
-					fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INOTHER : FONT_OUTOTHER;
-					colorid = !(item->dbe.flags & DBEF_SENT) ? COLOR_INOTHER : COLOR_OUTOTHER;
-					break;
-				}
-
-				ptrW text(TplFormatString(tpl, item->hContact, item));
+				ptrW text(TplFormatString(item->getCopyTemplate(), item->hContact, item));
 				hwndEditBox = CreateWindow(L"EDIT", text, WS_CHILD | WS_BORDER | ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL, 0, top, rc.right - rc.left, itemHeight, hwnd, NULL, g_plugin.getInst(), NULL);
 				OldEditWndProc = (WNDPROC)SetWindowLongPtr(hwndEditBox, GWLP_WNDPROC, (LONG_PTR)HistoryEditWndProc);
 				SendMessage(hwndEditBox, WM_SETFONT, (WPARAM)g_fontTable[fontid].hfnt, 0);
@@ -167,7 +179,7 @@ struct NewstoryListData : public MZeroedObject
 		GetWindowRect(hwnd, &rc);
 		int windowHeight = rc.bottom - rc.top;
 
-		if (windowHeight != cachedWindowHeight) {
+		if (windowHeight != cachedWindowHeight || cachedMaxTopItem != scrollTopItem) {
 			int maxTopItem = 0;
 			int tmp = 0;
 			for (maxTopItem = items.getCount(); (maxTopItem > 0) && (tmp < windowHeight); maxTopItem--)
@@ -186,7 +198,33 @@ struct NewstoryListData : public MZeroedObject
 			scrollTopPixel = cachedMaxTopPixel;
 		}
 
-		RecalcScrollBar();
+		if (g_plugin.bOptVScroll)
+			RecalcScrollBar();
+	}
+
+	int GetItemFromPixel(int yPos)
+	{
+		int count = items.getCount();
+		if (!count)
+			return -1;
+		
+		RECT rc;
+		GetClientRect(hwnd, &rc);
+
+		int height = rc.bottom - rc.top;
+		int current = scrollTopItem;
+		int top = scrollTopPixel;
+		int bottom = top + LayoutItem(current);
+		while (top <= height) {
+			if (yPos >= top && yPos <= bottom)
+				return current;
+			if (++current >= count)
+				break;
+			top = bottom;
+			bottom = top + LayoutItem(current);
+		}
+
+		return -1;
 	}
 
 	int LayoutItem(int index)
@@ -195,54 +233,17 @@ struct NewstoryListData : public MZeroedObject
 		RECT rc; GetClientRect(hwnd, &rc);
 		int width = rc.right - rc.left;
 
-		ItemData *item = items.get(index, ItemData::ELM_DATA);
+		ItemData *item = items[index];
 		if (!item) {
 			DeleteDC(hdc);
 			return 0;
 		}
 
-		int tpl;
-		int fontid;
-		switch (item->dbe.eventType) {
-		case EVENTTYPE_MESSAGE:
-			tpl = item->isGrouped() ? TPL_MSG_GRP : TPL_MESSAGE;
-			fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INMSG : FONT_OUTMSG;
-			break;
-
-		case EVENTTYPE_FILE:
-			tpl = TPL_FILE;
-			fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INFILE : FONT_OUTFILE;
-			break;
-
-		case EVENTTYPE_STATUSCHANGE:
-			tpl = TPL_SIGN;
-			fontid = FONT_STATUS;
-			break;
-
-		case EVENTTYPE_AUTHREQUEST:
-			tpl = TPL_AUTH;
-			fontid = FONT_INOTHER;
-			break;
-
-		case EVENTTYPE_ADDED:
-			tpl = TPL_ADDED;
-			fontid = FONT_INOTHER;
-			break;
-
-		case EVENTTYPE_JABBER_PRESENCE:
-			tpl = TPL_PRESENCE;
-			fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INOTHER : FONT_OUTOTHER;
-			break;
-
-		default:
-			tpl = TPL_OTHER;
-			fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INOTHER : FONT_OUTOTHER;
-			break;
-		}
+		int fontid, colorid;
+		item->getFontColor(fontid, colorid);
+		item->checkCreate(hwnd);
 
 		HFONT hfnt = (HFONT)SelectObject(hdc, g_fontTable[fontid].hfnt);
-		if (!item->data)
-			item->data = MTextCreateW(htuLog, ptrW(TplFormatString(tpl, item->hContact, item)));
 
 		SIZE sz;
 		sz.cx = width - 6;
@@ -256,79 +257,33 @@ struct NewstoryListData : public MZeroedObject
 
 	int PaintItem(HDC hdc, int index, int top, int width)
 	{
-		auto *item = items.get(index, ItemData::ELM_DATA);
+		auto *item = items[index];
+		item->savedTop = top;
 
 		//	LOGFONT lfText;
 		COLORREF clText, clBack, clLine;
-		int tpl;
-		int fontid;
-		int colorid;
-		switch (item->dbe.eventType) {
-		case EVENTTYPE_MESSAGE:
-			tpl = item->isGrouped() ? TPL_MSG_GRP : TPL_MESSAGE;
-			fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INMSG : FONT_OUTMSG;
-			colorid = !(item->dbe.flags & DBEF_SENT) ? COLOR_INMSG : COLOR_OUTMSG;
-			break;
+		int fontid, colorid;
+		item->getFontColor(fontid, colorid);
 
-		case EVENTTYPE_FILE:
-			tpl = TPL_FILE;
-			fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INFILE : FONT_OUTFILE;
-			colorid = !(item->dbe.flags & DBEF_SENT) ? COLOR_INFILE : COLOR_OUTFILE;
-			break;
-
-		case EVENTTYPE_STATUSCHANGE:
-			tpl = TPL_SIGN;
-			fontid = FONT_STATUS;
-			colorid = COLOR_STATUS;
-			break;
-
-		case EVENTTYPE_AUTHREQUEST:
-			tpl = TPL_AUTH;
-			fontid = FONT_INOTHER;
-			colorid = COLOR_INOTHER;
-			break;
-
-		case EVENTTYPE_ADDED:
-			tpl = TPL_ADDED;
-			fontid = FONT_INOTHER;
-			colorid = COLOR_INOTHER;
-			break;
-
-		case EVENTTYPE_JABBER_PRESENCE:
-			tpl = TPL_PRESENCE;
-			fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INOTHER : FONT_OUTOTHER;
-			colorid = !(item->dbe.flags & DBEF_SENT) ? COLOR_INOTHER : COLOR_OUTOTHER;
-			break;
-
-		default:
-			tpl = TPL_OTHER;
-			fontid = !(item->dbe.flags & DBEF_SENT) ? FONT_INOTHER : FONT_OUTOTHER;
-			colorid = !(item->dbe.flags & DBEF_SENT) ? COLOR_INOTHER : COLOR_OUTOTHER;
-			break;
-		}
 		clText = g_fontTable[fontid].cl;
 		if (item->bSelected) {
 			MTextSendMessage(0, item->data, EM_SETSEL, 0, -1);
 			clText = g_colorTable[COLOR_SELTEXT].cl;
-			clLine = GetSysColor(COLOR_HIGHLIGHTTEXT);
-			clBack = GetSysColor(COLOR_HIGHLIGHT);
+			clBack = g_colorTable[COLOR_SELBACK].cl;
+			clLine = g_colorTable[COLOR_SELFRAME].cl;
 		}
 		else {
 			MTextSendMessage(0, item->data, EM_SETSEL, 0, 0);
-			clLine = g_colorTable[COLOR_SELECTED].cl;
+			clLine = g_colorTable[COLOR_FRAME].cl;
 			clBack = g_colorTable[colorid].cl;
 		}
 
-		if (!item->data) {
-			item->data = MTextCreateW(htuLog, ptrW(TplFormatString(tpl, item->hContact, item)));
-			if (!item->data)
-				return 0;
-		}
+		item->checkCreate(hwnd);
 
 		SIZE sz;
 		sz.cx = width - 6;
 		HFONT hfnt = (HFONT)SelectObject(hdc, g_fontTable[fontid].hfnt);
-		MTextMeasure(hdc, &sz, (HANDLE)item->data);
+		MTextMeasure(hdc, &sz, item->data);
 		SelectObject(hdc, hfnt);
 		int height = sz.cy + 5;
 
@@ -346,7 +301,7 @@ struct NewstoryListData : public MZeroedObject
 		pos.x = 3;
 		pos.y = top + 2;
 		hfnt = (HFONT)SelectObject(hdc, g_fontTable[fontid].hfnt);
-		MTextDisplay(hdc, pos, sz, (HANDLE)item->data);
+		MTextDisplay(hdc, pos, sz, item->data);
 		SelectObject(hdc, hfnt);
 
 		DeleteObject(hbr);
@@ -443,36 +398,44 @@ static LRESULT CALLBACK HistoryEditWndProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
 LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+	int idx;
 	NewstoryListData *data = (NewstoryListData *)GetWindowLongPtr(hwnd, 0);
 
 	switch (msg) {
 	case WM_CREATE:
 		data = new NewstoryListData(hwnd);
 		SetWindowLongPtr(hwnd, 0, (LONG_PTR)data);
-		data->RecalcScrollBar();
+		if (!g_plugin.bOptVScroll)
+			SetWindowLong(hwnd, GWL_STYLE, GetWindowLong(hwnd, GWL_STYLE) & ~WS_VSCROLL);
+		else 
+			data->RecalcScrollBar();
 		break;
 
 	// History list control messages
 	case NSM_ADDEVENTS:
-		{
-			auto *p = (ADDEVENTS *)wParam;
-			if (p->eventCount == -1)
-				p->hFirstEVent = db_event_first(p->hContact);
+		if (auto *p = (ADDEVENTS *)wParam)
 			data->items.addEvent(p->hContact, p->hFirstEVent, p->eventCount);
-		}
-		data->RecalcScrollBar();
-		data->scrollTopItem = data->items.getCount();
-		data->FixScrollPosition();
-		InvalidateRect(hwnd, 0, FALSE);
+
+		data->redrawTimer.Stop();
+		data->redrawTimer.Start(100);
 		break;
 
 	case NSM_ADDCHATEVENT:
 		data->items.addChatEvent((SESSION_INFO *)wParam, (LOGINFO*)lParam);
-		data->RecalcScrollBar();
-		data->scrollTopItem = data->items.getCount();
-		data->FixScrollPosition();
-		InvalidateRect(hwnd, 0, FALSE);
+
+		data->redrawTimer.Stop();
+		data->redrawTimer.Start(100);
 		break;
+
+	case NSM_CLEAR:
+		data->items.clear();
+
+		data->redrawTimer.Stop();
+		data->redrawTimer.Start(100);
+		break;
+
+	case NSM_GETARRAY:
+		return (LRESULT)&data->items;
 
 	case NSM_GETCOUNT:
 		return data->items.getCount();
@@ -485,7 +448,7 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 				std::swap(start, end);
 
 			for (int i = start; i <= end; ++i) {
-				auto *p = data->items.get(i, ItemData::ELM_NOTHING);
+				auto *p = data->items.get(i, false);
 				p->bSelected = true;
 			}
 			
@@ -501,7 +464,7 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 				std::swap(start, end);
 
 			for (int i = start; i <= end; ++i) {
-				auto *p = data->items.get(i, ItemData::ELM_NOTHING);
+				auto *p = data->items.get(i, false);
 				p->bSelected = !p->bSelected;
 			}
 			
@@ -518,7 +481,7 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 
 			int count = data->items.getCount();
 			for (int i = 0; i < count; ++i) {
-				auto *p = data->items.get(i, ItemData::ELM_NOTHING);
+				auto *p = data->items.get(i, false);
 				if ((i >= start) && (i <= end)) 
 					p->bSelected = true;
 				else
@@ -539,7 +502,7 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 				start ^= end;
 			}
 			for (int i = start; i <= end; ++i) {
-				auto *p = data->items.get(i, ItemData::ELM_NOTHING);
+				auto *p = data->items.get(i, false);
 				p->bSelected = false;
 			}
 			
@@ -552,24 +515,7 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 		return 0;
 
 	case NSM_GETITEMFROMPIXEL:
-		{
-			RECT rc;
-			GetClientRect(hwnd, &rc);
-			int height = rc.bottom - rc.top;
-			int count = data->items.getCount();
-			int current = data->scrollTopItem;
-			int top = data->scrollTopPixel;
-			int bottom = top + data->LayoutItem(current);
-			while (top <= height) {
-				if ((lParam >= top) && (lParam <= bottom))
-					return current;
-				if (++current >= count)
-					return -1;
-				top = bottom;
-				bottom = top + data->LayoutItem(current);
-			}
-			return -1;
-		}
+		return data->GetItemFromPixel(lParam);
 
 	case NSM_SETCARET:
 		if (wParam < data->items.getCount()) {
@@ -582,30 +528,26 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 		return data->caret;
 
 	case NSM_FINDNEXT:
-		{
-			int id = data->items.FindNext(SendMessage(hwnd, NSM_GETCARET, 0, 0), Filter(Filter::EVENTONLY, (wchar_t *)wParam));
-			if (id >= 0) {
-				SendMessage(hwnd, NSM_SELECTITEMS2, id, id);
-				SendMessage(hwnd, NSM_SETCARET, id, TRUE);
-			}
-			return id;
+		idx = data->items.FindNext(data->caret, Filter(Filter::EVENTONLY, (wchar_t *)wParam));
+		if (idx >= 0) {
+			SendMessage(hwnd, NSM_SELECTITEMS2, idx, idx);
+			SendMessage(hwnd, NSM_SETCARET, idx, TRUE);
 		}
+		return idx;
 
 	case NSM_FINDPREV:
-		{
-			int id = data->items.FindPrev(SendMessage(hwnd, NSM_GETCARET, 0, 0), Filter(Filter::EVENTONLY, (wchar_t *)wParam));
-			if (id >= 0) {
-				SendMessage(hwnd, NSM_SELECTITEMS2, id, id);
-				SendMessage(hwnd, NSM_SETCARET, id, TRUE);
-			}
-			return id;
+		idx = data->items.FindPrev(data->caret, Filter(Filter::EVENTONLY, (wchar_t *)wParam));
+		if (idx >= 0) {
+			SendMessage(hwnd, NSM_SELECTITEMS2, idx, idx);
+			SendMessage(hwnd, NSM_SETCARET, idx, TRUE);
 		}
+		return idx;
 
 	case NSM_SEEKTIME:
 		{
 			int eventCount = data->items.getCount();
 			for (int i = 0; i < eventCount; i++) {
-				auto *p = data->items.get(i, ItemData::ELM_NOTHING);
+				auto *p = data->items.get(i, false);
 				if (p->dbe.timestamp >= wParam) {
 					SendMessage(hwnd, NSM_SELECTITEMS2, i, i);
 					SendMessage(hwnd, NSM_SETCARET, i, TRUE);
@@ -624,13 +566,17 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 		SendMessage(hwnd, NSM_SETCARET, data->items.getCount() - 1, 1);
 		break;
 
+	case NSM_SET_SRMM:
+		data->pMsgDlg = (CSrmmBaseDialog *)lParam;
+		break;
+
 	case NSM_DELETE:
 		if (IDYES == MessageBoxW(hwnd, TranslateW(wszDelete), _T(MODULETITLE), MB_YESNOCANCEL | MB_ICONQUESTION)) {
 			db_set_safety_mode(false);
 
 			int eventCount = data->items.getCount();
 			for (int i = eventCount - 1; i >= 0; i--) {
-				auto *p = data->items.get(i, ItemData::ELM_NOTHING);
+				auto *p = data->items.get(i, false);
 				if (p->hEvent && p->hContact)
 					db_event_delete(p->hEvent);
 			}
@@ -648,9 +594,9 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 
 			int eventCount = data->items.getCount();
 			for (int i = 0; i < eventCount; i++) {
-				ItemData *p = data->items.get(i, ItemData::ELM_NOTHING);
+				ItemData *p = data->items.get(i, false);
 				if (p->bSelected)
-					res.Append(ptrW(TplFormatString(TPL_COPY_MESSAGE, p->hContact, p)));
+					res.Append(ptrW(TplFormatString(p->getCopyTemplate(), p->hContact, p)));
 			}
 
 			CopyText(hwnd, res);
@@ -665,47 +611,10 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 	case WM_ERASEBKGND:
 		return 1;
 
-	case WM_PRINTCLIENT:
-		{
-			//			PaintClc(hwnd, dat, (HDC) wParam, NULL);
-			break;
-		}
-		/*
-				case WM_NCPAINT:
-				{
-					RECT rc;
-					GetWindowRect(hwnd, &rc);
-
-					HDC hdc;
-					hdc = GetDCEx(hwnd, (HRGN)wParam, DCX_WINDOW|DCX_INTERSECTRGN);
-					FrameRect(hdc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
-					ReleaseDC(hwnd, hdc);
-				}
-		*/
-		/*
-				case WM_NCPAINT:
-				{
-					if (wParam == 1)
-						break;
-					{
-						POINT ptTopLeft = { 0, 0 };
-						HRGN hClientRgn;
-						ClientToScreen(hwnd, &ptTopLeft);
-						hClientRgn = CreateRectRgn(0, 0, 1, 1);
-						CombineRgn(hClientRgn, (HRGN) wParam, NULL, RGN_COPY);
-						OffsetRgn(hClientRgn, -ptTopLeft.x, -ptTopLeft.y);
-						InvalidateRgn(hwnd, hClientRgn, FALSE);
-						DeleteObject(hClientRgn);
-						UpdateWindow(hwnd);
-					}
-					break;
-				}
-		*/
 	case WM_PAINT:
+		PAINTSTRUCT ps;
 		{
-			HDC hdcWindow;
-			PAINTSTRUCT ps;
-			hdcWindow = BeginPaint(hwnd, &ps);
+			HDC hdcWindow = BeginPaint(hwnd, &ps);
 
 			/* we get so many InvalidateRect()'s that there is no point painting,
 			Windows in theory shouldn't queue up WM_PAINTs in this case but it does so
@@ -717,11 +626,10 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 				HDC hdc = CreateCompatibleDC(hdcWindow);
 				HBITMAP hbmSave = (HBITMAP)SelectObject(hdc, CreateCompatibleBitmap(hdcWindow, rc.right - rc.left, rc.bottom - rc.top));
 
-				GetClientRect(hwnd, &rc);
 				int height = rc.bottom - rc.top;
 				int width = rc.right - rc.left;
 				int top = data->scrollTopPixel;
-				int idx = data->scrollTopItem;
+				idx = data->scrollTopItem;
 				while ((top < height) && (idx < data->items.getCount()))
 					top += data->PaintItem(hdc, idx++, top, width);
 
@@ -729,23 +637,34 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 					RECT rc2;
 					SetRect(&rc2, 0, top, width, height);
 
-					HBRUSH hbr;
-					hbr = CreateSolidBrush(RGB(0xff, 0xff, 0xff));
+					HBRUSH hbr = CreateSolidBrush(g_colorTable[COLOR_BACK].cl);
 					FillRect(hdc, &rc2, hbr);
 					DeleteObject(hbr);
 				}
 
-				GetWindowRect(hwnd, &rc);
-				rc.right -= rc.left; rc.left = 0;
-				rc.bottom -= rc.top; rc.top = 0;
-				DrawEdge(hdc, &rc, BDR_SUNKENOUTER, BF_RECT);
+				if (g_plugin.bDrawEdge)
+					DrawEdge(hdc, &rc, BDR_SUNKENOUTER, BF_RECT);
 
 				BitBlt(hdcWindow, 0, 0, rc.right, rc.bottom, hdc, 0, 0, SRCCOPY);
 				DeleteObject(SelectObject(hdc, hbmSave));
 				DeleteDC(hdc);
 			}
+		}
+		EndPaint(hwnd, &ps);
+		break;
 
-			EndPaint(hwnd, &ps);
+	case WM_CONTEXTMENU:
+		{
+			POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+			if (pt.x == -1 && pt.y == -1)
+				GetCursorPos(&pt);
+
+			POINT pt2 = pt;
+			ScreenToClient(hwnd, &pt2);
+
+			int index = data->GetItemFromPixel(pt2.y);
+			if (index != -1)
+				data->OnContextMenu(index, pt);
 		}
 		break;
 
@@ -771,36 +690,34 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 		return DLGC_WANTMESSAGE;
 
 	case WM_KEYDOWN:
-		{
-			switch (wParam) {
-			case VK_UP:
-				SendMessage(hwnd, NSM_SELECTITEMS2, data->caret - 1, data->caret - 1);
-				SendMessage(hwnd, NSM_SETCARET, data->caret - 1, TRUE);
-				break;
+		switch (wParam) {
+		case VK_UP:
+			SendMessage(hwnd, NSM_SELECTITEMS2, data->caret - 1, data->caret - 1);
+			SendMessage(hwnd, NSM_SETCARET, data->caret - 1, TRUE);
+			break;
 
-			case VK_DOWN:
-				SendMessage(hwnd, NSM_SELECTITEMS2, data->caret + 1, data->caret + 1);
-				SendMessage(hwnd, NSM_SETCARET, data->caret + 1, TRUE);
-				break;
+		case VK_DOWN:
+			SendMessage(hwnd, NSM_SELECTITEMS2, data->caret + 1, data->caret + 1);
+			SendMessage(hwnd, NSM_SETCARET, data->caret + 1, TRUE);
+			break;
 
-			case VK_PRIOR:
-				break;
+		case VK_PRIOR:
+			break;
 
-			case VK_NEXT:
-				break;
+		case VK_NEXT:
+			break;
 
-			case VK_HOME:
-				break;
+		case VK_HOME:
+			break;
 
-			case VK_END:
-				break;
+		case VK_END:
+			break;
 
-			case VK_F2:
-				data->BeginEditItem(data->caret);
-				break;
-			}
+		case VK_F2:
+			data->BeginEditItem(data->caret);
 			break;
 		}
+		break;
 
 	case WM_SYSCHAR:
 	case WM_CHAR:
@@ -815,17 +732,14 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 			}
 			else if ((ch == 'A') && (GetKeyState(VK_CONTROL) & 0x80)) {
 				SendMessage(hwnd, NSM_SELECTITEMS, 0, data->items.getCount());
-				//				} else
-				//				if (ch == VK_ESCAPE)
-				//				{
-				//					PostMessage(GetParent(hwnd), WM_CLOSE, 0, 0);
 			}
 		}
 		break;
 
 	case WM_LBUTTONDOWN:
 		{
-			int item = SendMessage(hwnd, NSM_GETITEMFROMPIXEL, LOWORD(lParam), HIWORD(lParam));
+			POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+			int item = data->GetItemFromPixel(pt.y);
 			if (item >= 0) {
 				if (data->caret != item)
 					data->EndEditItem();
@@ -839,17 +753,36 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 					SendMessage(hwnd, NSM_SETCARET, item, TRUE);
 				}
 				else {
-					if (data->caret == item)
-						data->BeginEditItem(item);
-					else {
-						SendMessage(hwnd, NSM_SELECTITEMS2, item, item);
-						SendMessage(hwnd, NSM_SETCARET, item, TRUE);
+					auto *pItem = data->items[item];
+					pt.y -= pItem->savedTop;
+					if (pItem->isLink(pt)) {
+						Utils_OpenUrlW(pItem->getWBuf());
+						return 0;
 					}
+					
+					if (data->caret == item) {
+						data->BeginEditItem(item);
+						return 0;
+					}
+
+					SendMessage(hwnd, NSM_SELECTITEMS2, item, item);
+					SendMessage(hwnd, NSM_SETCARET, item, TRUE);
 				}
 			}
 		}
 		SetFocus(hwnd);
 		return 0;
+
+	case WM_MOUSEMOVE:
+		{
+			POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+			int item = data->GetItemFromPixel(pt.y);
+			if (item >= 0) {
+				auto *pItem = data->items[item];
+				MTextSendMessage(hwnd, pItem->data, msg, wParam, lParam);
+			}
+		}
+		break;
 
 	case WM_MOUSEWHEEL:
 		{
@@ -861,7 +794,7 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 				scrollLines = 3;
 			data->ScrollListBy(0, (short)HIWORD(wParam) * 10 * (signed)scrollLines / WHEEL_DELTA);
 
-			if ((s_scrollTopItem != data->scrollTopItem) || (s_scrollTopPixel != data->scrollTopPixel))
+			if (s_scrollTopItem != data->scrollTopItem || s_scrollTopPixel != data->scrollTopPixel)
 				InvalidateRect(hwnd, 0, FALSE);
 		}
 		return TRUE;
@@ -917,7 +850,7 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 				return 0;
 			}
 
-			if ((s_scrollTopItem != data->scrollTopItem) || (s_scrollTopPixel != data->scrollTopPixel))
+			if (s_scrollTopItem != data->scrollTopItem || s_scrollTopPixel != data->scrollTopPixel)
 				InvalidateRect(hwnd, 0, FALSE);
 			break;
 		}
@@ -925,13 +858,6 @@ LRESULT CALLBACK NewstoryListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 	case WM_DESTROY:
 		delete data;
 		SetWindowLongPtr(hwnd, 0, 0);
-		break;
-
-	case WM_CONTEXTMENU:
-		{
-			int index = SendMessage(hwnd, NSM_GETITEMFROMPIXEL, LOWORD(lParam), HIWORD(lParam));
-			data->OnContextMenu(index);
-		}
 		break;
 	}
 

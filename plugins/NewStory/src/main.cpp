@@ -14,6 +14,7 @@
 CMPlugin g_plugin;
 
 CMOption<bool> g_bOptGrouping(MODULENAME, "MessageGrouping", false);
+CMOption<bool> g_bOptDrawEdge(MODULENAME, "DrawEdge", true);
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -32,7 +33,8 @@ PLUGININFOEX pluginInfoEx =
 };
 
 CMPlugin::CMPlugin() :
-	PLUGIN<CMPlugin>(MODULENAME, pluginInfoEx)
+	PLUGIN<CMPlugin>(MODULENAME, pluginInfoEx),
+	bOptVScroll(MODULENAME, "VScroll", true)
 {
 }
 
@@ -57,8 +59,6 @@ static IconItem icons[] =
 	{ LPGEN("Incoming message"),  "msgin",     ICO_MSGIN      },
 	{ LPGEN("Outgoing message"),  "msgout",    ICO_MSGOUT     },
 	{ LPGEN("User signed in"),    "signin",    ICO_SIGNIN     },
-	{ LPGEN("File"),              "file",      ICO_FILE       },
-	{ LPGEN("URL"),               "url",       ICO_URL        },
 	{ LPGEN("Unknown event"),     "unknown",   ICO_UNKNOWN    },
 
 	{ LPGEN("Find previous"),     "findprev",  ICO_FINDPREV   },
@@ -67,7 +67,7 @@ static IconItem icons[] =
 	{ LPGEN("Conversations"),     "timetree",  ICO_TIMETREE   },
 
 	{ LPGEN("Template group"),    "tplgroup",  ICO_TPLGROUP   },
-	{ LPGEN("Reset"),             "reset",     ICO_RESET      },
+	{ LPGEN("Cancel edit"),       "reset",     ICO_RESET      },
 	{ LPGEN("Update preview"),    "preview",   ICO_PREVIEW    },
 	{ LPGEN("Help"),              "varhelp",   ICO_VARHELP    }
 };
@@ -105,6 +105,8 @@ static int evtPreShutdown(WPARAM, LPARAM)
 int CMPlugin::Load()
 {
 	registerIcon(MODULETITLE, icons);
+
+	bDrawEdge = g_bOptDrawEdge;
 	bMsgGrouping = g_bOptGrouping;
 
 	m_log = RegisterSrmmLog(MODULETITLE, _T(MODULENAME), NewStory_Stub);

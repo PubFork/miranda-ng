@@ -5,18 +5,23 @@
 
 class CGeneralOptsDlg : public CDlgBase
 {
-	CCtrlCheck chkGrouping;
+	CCtrlCheck chkGrouping, chkVScroll, chkDrawEdge;
 
 public:
 	CGeneralOptsDlg() :
 		CDlgBase(g_plugin, IDD_OPT_ADVANCED),
+		chkVScroll(this, IDC_VSCROLL),
+		chkDrawEdge(this, IDC_DRAWEDGE),
 		chkGrouping(this, IDC_GROUPING)
 	{
+		CreateLink(chkVScroll, g_plugin.bOptVScroll);
 		CreateLink(chkGrouping, g_bOptGrouping);
+		CreateLink(chkDrawEdge, g_bOptDrawEdge);
 	}
 
 	bool OnApply() override
 	{
+		g_plugin.bDrawEdge = g_bOptDrawEdge;
 		g_plugin.bMsgGrouping = g_bOptGrouping;
 		return true;
 	}
@@ -27,6 +32,8 @@ public:
 
 class CTemplateOptsDlg : public CDlgBase
 {
+	MCONTACT m_hContact;
+	MEVENT m_hDbEVent;
 	TemplateInfo *m_curr = 0;
 
 	void UpdatePreview(CCtrlButton*)
@@ -34,24 +41,13 @@ class CTemplateOptsDlg : public CDlgBase
 		replaceStrW(m_curr->tmpValue, m_edit.GetText());
 
 		ItemData item;
-		item.hContact = db_find_first();
-		while (item.hContact && !item.hEvent) {
-			item.hEvent = db_event_first(item.hContact);
-			if (!item.hEvent)
-				item.hContact = db_find_next(item.hContact);
-		}
-
-		if (item.hContact && item.hEvent) {
-			item.load(ItemData::ELM_DATA);
+		item.hContact = m_hContact;
+		item.hEvent = m_hDbEVent;
+		item.load(true);
 			
-			ptrW wszText(TplFormatStringEx(int(m_curr-templates), m_curr->tmpValue, item.hContact, &item));
-			preview.SetText(wszText);
-			gpreview.SetText(wszText);
-		}
-		else {
-			preview.SetText(L"");
-			gpreview.SetText(L"");
-		}
+		ptrW wszText(TplFormatStringEx(int(m_curr-templates), m_curr->tmpValue, item.hContact, &item));
+		preview.SetText(wszText);
+		gpreview.SetText(wszText);
 	}
 
 	CCtrlBase preview, gpreview;
@@ -86,6 +82,20 @@ public:
 
 		ImageList_AddIcon(himgTree, g_plugin.getIcon(ICO_TPLGROUP));
 
+		m_hContact = db_add_contact();
+		Proto_AddToContact(m_hContact, META_PROTO);
+		Contact_Hide(m_hContact);
+		Contact_RemoveFromList(m_hContact);
+		db_set_ws(m_hContact, META_PROTO, "Nick", TranslateT("Test contact"));
+
+		DBEVENTINFO dbei = {};
+		dbei.pBlob = (BYTE *)"The quick brown fox jumps over the lazy dog";
+		dbei.cbBlob = (DWORD)strlen((char *)dbei.pBlob);
+		dbei.flags = DBEF_TEMPORARY;
+		dbei.eventType = EVENTTYPE_MESSAGE;
+		dbei.timestamp = time(0);
+		m_hDbEVent = db_event_add(m_hContact, &dbei);
+
 		HTREEITEM hGroup = 0, hFirst = 0;
 		const wchar_t *pwszPrevGroup = nullptr;
 		for (auto &it : templates) {
@@ -97,7 +107,7 @@ public:
 				tvis.hInsertAfter = TVI_LAST;
 				tvis.item.mask = TVIF_TEXT | TVIF_STATE | TVIF_PARAM | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
 				tvis.item.state = tvis.item.stateMask = TVIS_BOLD;
-				tvis.item.pszText = it.group;
+				tvis.item.pszText = TranslateW(it.group);
 				tvis.item.lParam = 0;
 				hGroup = m_tree.InsertItem(&tvis);
 
@@ -109,8 +119,8 @@ public:
 			tvis.hParent = hGroup;
 			tvis.hInsertAfter = TVI_LAST;
 			tvis.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
-			tvis.item.pszText = it.title;
-			tvis.item.iSelectedImage = tvis.item.iImage = ImageList_AddIcon(himgTree, g_plugin.getIcon(it.icon));
+			tvis.item.pszText = TranslateW(it.title);
+			tvis.item.iSelectedImage = tvis.item.iImage = ImageList_AddIcon(himgTree, it.getIcon());
 			tvis.item.lParam = (LPARAM)&it;
 			m_tree.InsertItem(&tvis);
 
@@ -142,19 +152,21 @@ public:
 
 	void OnDestroy() override
 	{
+		db_event_delete(m_hDbEVent);
+		db_delete_contact(m_hContact);
+
 		for (auto &it : templates)
 			replaceStrW(it.tmpValue, nullptr);
 	}
 
 	void onClick_Reset(CCtrlButton *)
 	{
-		for (auto &it : templates) {
-			replaceStrW(it.tmpValue, nullptr);
-			replaceStrW(it.value, nullptr);
+		if (m_curr) {
+			replaceStrW(m_curr->tmpValue, nullptr);
+			replaceStrW(m_curr->value, nullptr);
+			m_edit.SetText(m_curr->defvalue);
 		}
 
-		if (m_curr)
-			m_edit.SetText(m_curr->defvalue);
 		UpdatePreview(0);
 		NotifyChange();
 	}

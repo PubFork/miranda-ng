@@ -47,6 +47,9 @@ enum
 	NSM_ADDEVENTS,
 	NSM_ADDCHATEVENT,
 
+	// clear log
+	NSM_CLEAR,
+
 	// wParam = id
 	NSM_SETCARET,
 
@@ -68,10 +71,14 @@ enum
 
 	//
 	NSM_GETCOUNT,
+	NSM_GETARRAY,
 
 	//
 	NSM_SEEKEND,
 	NSM_SEEKTIME,
+
+	// 
+	NSM_SET_SRMM, // act inside SRMM dialog
 
 	NSM_LAST
 };

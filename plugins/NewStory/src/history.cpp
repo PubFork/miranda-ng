@@ -311,7 +311,7 @@ class CHistoryDlg : public CDlgBase
 		// time tree bar
 		int hTimeTree = 0;
 		if (m_dwOptions & WND_OPT_TIMETREE) {
-			hTimeTree = 80; // need to calculate correctly
+			hTimeTree = 100; // need to calculate correctly
 			hDwp = DeferWindowPos(hDwp, m_timeTree.GetHwnd(), 0,
 				WND_SPACING, WND_SPACING + hToolBar + hFilterBar,
 				hTimeTree, h - WND_SPACING * 2 - hFilterBar - hToolBar - hSearch - hStatus,
@@ -336,6 +336,63 @@ class CHistoryDlg : public CDlgBase
 			SetWindowText(m_hwnd, TranslateT("System history"));
 	}
 
+	void TimeTreeBuild()
+	{
+		if (!(m_dwOptions & WND_OPT_TIMETREE))
+			return;
+
+		m_timeTree.DeleteAllItems();
+		auto *pArray = (HistoryArray *)m_histControl.SendMsg(NSM_GETARRAY, 0, 0);
+		int numItems = pArray->getCount();
+
+		int CurYear = 0, CurMonth = 0, CurDay = 0, PrevYear = -1, PrevMonth = -1, PrevDay = -1;
+		HTREEITEM hCurYear = 0, hCurMonth = 0, hCurDay = 0;
+		for (int i = 0; i < numItems; i++) {
+			auto *pItem = pArray->get(i, true);
+			if (pItem->dbe.timestamp == 0)
+				continue;
+
+			struct tm ts = { 0 };
+			time_t timestamp = pItem->dbe.timestamp;
+			errno_t err = localtime_s(&ts, &timestamp);  /* statically alloced, local time correction */
+			if (err != 0)
+				return;
+
+			CurYear = ts.tm_year + 1900;
+			CurMonth = ts.tm_mon + 1;
+			CurDay = ts.tm_mday;
+			wchar_t buf[50];
+			TVINSERTSTRUCT tvi;
+			tvi.hParent = nullptr;
+			tvi.item.mask = TVIF_TEXT | TVIF_PARAM;
+			if (CurYear != PrevYear) {
+				_itow(CurYear, buf, 10);
+				tvi.item.pszText = buf;
+				tvi.item.lParam = 0;
+				hCurYear = TreeView_InsertItem(m_timeTree.GetHwnd(), &tvi);
+				PrevYear = CurYear;
+			}
+			if (CurMonth != PrevMonth) {
+				tvi.hParent = hCurYear;
+				tvi.item.pszText = TranslateW(months[CurMonth - 1]);
+				tvi.item.lParam = CurMonth;
+				hCurMonth = TreeView_InsertItem(m_timeTree.GetHwnd(), &tvi);
+				PrevMonth = CurMonth;
+			}
+			if (CurDay != PrevDay) {
+				_itow(CurDay, buf, 10);
+				tvi.hParent = hCurMonth;
+				tvi.item.pszText = buf;
+				tvi.item.lParam = 0;
+				hCurDay = TreeView_InsertItem(m_timeTree.GetHwnd(), &tvi);
+				PrevDay = CurDay;
+			}
+		}
+		disableTimeTreeChange = true;
+		HTREEITEM root = m_timeTree.GetRoot();
+		m_timeTree.SelectItem(root);
+	}
+
 	CCtrlBase m_histControl;
 	CCtrlEdit edtSearchText;
 	CCtrlMButton btnUserInfo, btnSendMsg, btnUserMenu, btnCopy, btnOptions, btnFilter;
@@ -347,7 +404,7 @@ public:
 		CDlgBase(g_plugin, IDD_HISTORY),
 		m_hContact(_hContact),
 		m_timeTree(this, IDC_TIMETREEVIEW),
-		m_histControl(this, IDC_ITEMS2),
+		m_histControl(this, IDC_HISTORYCONTROL),
 		edtSearchText(this, IDC_SEARCHTEXT),
 		btnCopy(this, IDC_COPY, g_plugin.getIcon(ICO_COPY), LPGEN("Copy")),
 		btnExport(this, IDC_EXPORT, g_plugin.getIcon(ICO_EXPORT), LPGEN("Export...")),
@@ -385,7 +442,9 @@ public:
 		m_dwOptions = g_plugin.getDword(0, "dwOptions");
 
 		m_hMenu = LoadMenu(g_plugin.getInst(), MAKEINTRESOURCE(IDR_POPUPS));
-		HMENU hMenu = GetSubMenu(m_hMenu, 1);
+		TranslateMenu(m_hMenu);
+
+		HMENU hMenu = GetSubMenu(m_hMenu, 0);
 		CheckMenuItem(hMenu, ID_FILTER_INCOMING,
 			showFlags & HIST_SHOW_IN ? MF_CHECKED : MF_UNCHECKED);
 		CheckMenuItem(hMenu, ID_FILTER_OUTGOING,
@@ -492,8 +551,8 @@ public:
 
 		UpdateTitle();
 
-		ADDEVENTS tmp = { m_hContact, 0, -1 };
-		SendMessage(m_histControl.GetHwnd(), NSM_ADDEVENTS, WPARAM(&tmp), 0);
+		ADDEVENTS tmp = { m_hContact, db_event_first(m_hContact), -1 };
+		m_histControl.SendMsg(NSM_ADDEVENTS, WPARAM(&tmp), 0);
 
 		Window_SetIcon_IcoLib(m_hwnd, g_plugin.getIconHandle(ICO_NEWSTORY));
 
@@ -503,11 +562,11 @@ public:
 		SendMessage(ibMessages.hwndIcoIn, BM_SETIMAGE, IMAGE_ICON, (LPARAM)g_plugin.getIcon(ICO_MSGIN));
 		SendMessage(ibMessages.hwndIcoOut, BM_SETIMAGE, IMAGE_ICON, (LPARAM)g_plugin.getIcon(ICO_MSGOUT));
 		
-		SendMessage(ibFiles.hwndIco, STM_SETICON, (LPARAM)g_plugin.getIcon(ICO_FILE), 0);
+		SendMessage(ibFiles.hwndIco, STM_SETICON, (LPARAM)Skin_LoadIcon(SKINICON_EVENT_FILE), 0);
 		SendMessage(ibFiles.hwndIcoIn, BM_SETIMAGE, IMAGE_ICON, (LPARAM)g_plugin.getIcon(ICO_MSGIN));
 		SendMessage(ibFiles.hwndIcoOut, BM_SETIMAGE, IMAGE_ICON, (LPARAM)g_plugin.getIcon(ICO_MSGOUT));
 		
-		SendMessage(ibUrls.hwndIco, STM_SETICON, (LPARAM)g_plugin.getIcon(ICO_URL), 0);
+		SendMessage(ibUrls.hwndIco, STM_SETICON, (LPARAM)Skin_LoadIcon(SKINICON_EVENT_URL), 0);
 		SendMessage(ibUrls.hwndIcoIn, BM_SETIMAGE, IMAGE_ICON, (LPARAM)g_plugin.getIcon(ICO_MSGIN));
 		SendMessage(ibUrls.hwndIcoOut, BM_SETIMAGE, IMAGE_ICON, (LPARAM)g_plugin.getIcon(ICO_MSGOUT));
 		
@@ -518,6 +577,7 @@ public:
 		SetFocus(m_histControl.GetHwnd());
 
 		ShowHideControls();
+		TimeTreeBuild();
 		return true;
 	}
 
@@ -533,7 +593,6 @@ public:
 			DestroyWindow(m_hwndStatus);
 			m_hwndStatus = nullptr;
 		}
-
 	}
 
 	void onClick_Calendar(CCtrlButton *pButton)
@@ -553,6 +612,7 @@ public:
 	{
 		m_histControl.SendMsg(NSM_DELETE, 0, 0);
 		UpdateTitle();
+		TimeTreeBuild();
 	}
 
 	void onClick_TimeTree(CCtrlButton*)
@@ -562,8 +622,9 @@ public:
 		else
 			m_dwOptions |= WND_OPT_TIMETREE;
 
-		ShowHideControls();
 		LayoutHistoryWnd();
+		ShowHideControls();
+		TimeTreeBuild();
 	}
 
 	void onClick_Export(CCtrlButton *)
@@ -649,59 +710,61 @@ public:
 
 		SetFilePointer(hFile, -3, nullptr, FILE_CURRENT);
 
-		//export events
-		MEVENT hDbEvent = db_event_first(m_hContact);
+		// export events
 		bool bAppendOnly = false;
-		while (hDbEvent != NULL) {
-			DBEVENTINFO dbei = {};
-			int nSize = db_event_getBlobSize(hDbEvent);
-			if (nSize > 0) {
-				dbei.cbBlob = nSize;
-				dbei.pBlob = (PBYTE)mir_alloc(dbei.cbBlob + 2);
-				dbei.pBlob[dbei.cbBlob] = 0;
-				dbei.pBlob[dbei.cbBlob + 1] = 0;
-				// Double null terminate, this should prevent most errors 
-				// where the blob received has an invalid format
-			}
-
-			if (!db_event_get(hDbEvent, &dbei)) {
-				if (bAppendOnly) {
-					SetFilePointer(hFile, -3, nullptr, FILE_END);
-					WriteFile(hFile, ",", 1, &dwBytesWritten, nullptr);
+		if (auto *pCursor = DB::Events(m_hContact)) {
+			while (MEVENT hDbEvent = pCursor->FetchNext()) {
+				DBEVENTINFO dbei = {};
+				int nSize = db_event_getBlobSize(hDbEvent);
+				if (nSize > 0) {
+					dbei.cbBlob = nSize;
+					dbei.pBlob = (PBYTE)mir_alloc(dbei.cbBlob + 2);
+					dbei.pBlob[dbei.cbBlob] = 0;
+					dbei.pBlob[dbei.cbBlob + 1] = 0;
+					// Double null terminate, this should prevent most errors 
+					// where the blob received has an invalid format
 				}
-				JSONNode pRoot2;
-				pRoot2.push_back(JSONNode("type", dbei.eventType));
 
-				if (mir_strcmp(dbei.szModule, proto))
-					pRoot2.push_back(JSONNode("module", dbei.szModule));
+				if (!db_event_get(hDbEvent, &dbei)) {
+					if (bAppendOnly) {
+						SetFilePointer(hFile, -3, nullptr, FILE_END);
+						WriteFile(hFile, ",", 1, &dwBytesWritten, nullptr);
+					}
 
-				pRoot2.push_back(JSONNode("timestamp", dbei.timestamp));
+					JSONNode pRoot2;
+					pRoot2.push_back(JSONNode("type", dbei.eventType));
 
-				wchar_t szTemp[500];
-				TimeZone_PrintTimeStamp(UTC_TIME_HANDLE, dbei.timestamp, L"I", szTemp, _countof(szTemp), 0);
-				pRoot2.push_back(JSONNode("isotime", T2Utf(szTemp).get()));
+					if (mir_strcmp(dbei.szModule, proto))
+						pRoot2.push_back(JSONNode("module", dbei.szModule));
 
-				std::string flags;
-				if (dbei.flags & DBEF_SENT)
-					flags += "m";
-				if (dbei.flags & DBEF_READ)
-					flags += "r";
-				pRoot2.push_back(JSONNode("flags", flags));
+					pRoot2.push_back(JSONNode("timestamp", dbei.timestamp));
 
-				ptrW msg(DbEvent_GetTextW(&dbei, CP_ACP));
-				if (msg)
-					pRoot2.push_back(JSONNode("body", T2Utf(msg).get()));
+					wchar_t szTemp[500];
+					TimeZone_PrintTimeStamp(UTC_TIME_HANDLE, dbei.timestamp, L"I", szTemp, _countof(szTemp), 0);
+					pRoot2.push_back(JSONNode("isotime", T2Utf(szTemp).get()));
 
-				output = pRoot2.write_formatted();
-				output += "\n]}";
+					std::string flags;
+					if (dbei.flags & DBEF_SENT)
+						flags += "m";
+					if (dbei.flags & DBEF_READ)
+						flags += "r";
+					pRoot2.push_back(JSONNode("flags", flags));
 
-				WriteFile(hFile, output.c_str(), (int)output.size(), &dwBytesWritten, nullptr);
-				if (dbei.pBlob)
-					mir_free(dbei.pBlob);
+					ptrW msg(DbEvent_GetTextW(&dbei, CP_ACP));
+					if (msg)
+						pRoot2.push_back(JSONNode("body", T2Utf(msg).get()));
+
+					output = pRoot2.write_formatted();
+					output += "\n]}";
+
+					WriteFile(hFile, output.c_str(), (int)output.size(), &dwBytesWritten, nullptr);
+					if (dbei.pBlob)
+						mir_free(dbei.pBlob);
+				}
+
+				bAppendOnly = true;
 			}
-
-			bAppendOnly = true;
-			hDbEvent = db_event_next(m_hContact, hDbEvent);
+			delete pCursor;
 		}
 
 		// Close the file
@@ -730,7 +793,6 @@ public:
 		m_histControl.SendMsg(NSM_FINDPREV, ptrW(edtSearchText.GetText()), 0);
 	}
 
-
 	void onClick_Message(CCtrlButton *)
 	{
 		CallService(MS_MSG_SENDMESSAGE, m_hContact, 0);
@@ -741,7 +803,7 @@ public:
 		RECT rc;
 		GetWindowRect(pButton->GetHwnd(), &rc);
 
-		switch (TrackPopupMenu(GetSubMenu(m_hMenu, 2), TPM_RETURNCMD, rc.left, rc.bottom, 0, m_hwnd, NULL)) {
+		switch (TrackPopupMenu(GetSubMenu(m_hMenu, 1), TPM_RETURNCMD, rc.left, rc.bottom, 0, m_hwnd, NULL)) {
 		case ID_LOGOPTIONS_OPTIONS:
 			g_plugin.openOptions(L"History", L"NewStory", L"Advanced");
 			break;
@@ -903,14 +965,6 @@ public:
 					PostMessage(m_hwnd, UM_REBUILDLIST, 0, 0);
 				break;*/
 
-				// case IDC_SEARCH:
-				// int id = DialogBoxParam(hInst, MAKEINTRESOURCE(IDD_SEARCH), 0, SearchDlgProc, (LPARAM)GetDlgItem(m_hwnd, IDC_ITEMS));
-				// SendMessage(GetDlgItem(m_hwnd, IDC_ITEMS), LB_SETCARETINDEX, id, 0);
-				// SendMessage(GetDlgItem(m_hwnd, IDC_ITEMS), LB_SETTOPINDEX, id, 0);
-				// SendMessage(GetDlgItem(m_hwnd, IDC_ITEMS), LB_SELITEMRANGE, FALSE, MAKELPARAM(0,eventCount));
-				// SendMessage(GetDlgItem(m_hwnd, IDC_ITEMS), LB_SELITEMRANGE, TRUE, MAKELPARAM(id,id));
-				// break;
-
 		case WM_USER + 0x600:
 			if (wParam)
 				m_histControl.SendMsg(NSM_SEEKTIME, wParam, 0);
@@ -921,24 +975,67 @@ public:
 
 	void onSelChanged_TimeTree(CCtrlTreeView::TEventInfo *)
 	{
-		if (disableTimeTreeChange) {
+		wchar_t* val1, *val2, *val3;
+		int yearsel = 0, monthsel = 0, daysel = 1;
+		bool monthfound = false;
+		if (disableTimeTreeChange)
 			disableTimeTreeChange = false;
-		}
 		else {
-			// LPNMTREEVIEW pnmtv = (LPNMTREEVIEW)lParam;
-			//	int id = pnmtv->itemNew.lParam;
-			//	SendMessage(GetDlgItem(m_hwnd, IDC_ITEMS), LB_SETCARETINDEX, id, 0);
-			//	SendMessage(m_hwnd, WM_COMMAND, MAKEWPARAM(IDC_ITEMS, LBN_SELCHANGE), (LPARAM)GetDlgItem(m_hwnd, IDC_ITEMS));
-			//	SendMessage(GetDlgItem(m_hwnd, IDC_ITEMS), LB_SETTOPINDEX, id, 0);
-			//	SendMessage(GetDlgItem(m_hwnd, IDC_ITEMS), LB_SELITEMRANGE, FALSE, MAKELPARAM(0,eventCount));
-			//	SendMessage(GetDlgItem(m_hwnd, IDC_ITEMS), LB_SELITEMRANGE, TRUE, MAKELPARAM(id,id));
+			HTREEITEM hti1 = m_timeTree.GetSelection();
+			TVITEMEX tvi = { 0 };
+			tvi.hItem = hti1;
+			tvi.mask = TVIF_HANDLE | TVIF_TEXT | TVIF_PARAM;
+			tvi.cchTextMax = MAX_PATH;
+			tvi.lParam = 0;
+			tvi.pszText = (wchar_t*)_alloca(MAX_PATH * sizeof(wchar_t));
+
+			m_timeTree.GetItem(&tvi);
+			val1 = tvi.pszText;
+			if (tvi.lParam) {
+				monthsel = tvi.lParam;
+				monthfound = true;
+			}
+			HTREEITEM hti2 = m_timeTree.GetParent(hti1);
+			if ((!monthfound) && (!hti2))
+				yearsel = _wtoi(val1);
+			if ((!monthfound) && (hti2))
+				daysel = _wtoi(val1);
+			if (hti2) {
+				tvi.hItem = hti2;
+				tvi.lParam = 0;
+				m_timeTree.GetItem(&tvi);
+				val2 = tvi.pszText;
+				if (tvi.lParam) {
+					monthsel = tvi.lParam;
+					monthfound = true;
+				} else
+					yearsel = _wtoi(val2);
+				HTREEITEM hti3 = m_timeTree.GetParent(hti2);
+				if (hti3) {
+					tvi.hItem = hti3;
+					tvi.lParam = 0;
+					m_timeTree.GetItem(&tvi);
+					val3 = tvi.pszText;
+					yearsel = _wtoi(val3);
+				}
+			}
+			struct tm tm_sel;
+			tm_sel.tm_hour = tm_sel.tm_min = tm_sel.tm_sec = 0;
+			tm_sel.tm_isdst = 1;
+			tm_sel.tm_mday = daysel;
+			if (monthsel)
+				tm_sel.tm_mon = monthsel - 1;
+			else
+				tm_sel.tm_mon = 0;
+			tm_sel.tm_year = yearsel - 1900;
+			PostMessage(m_hwnd, WM_USER + 0x600, mktime(&tm_sel), 0);
 		}
 	}
 
 	// case UM_REBUILDLIST:
 	//			if (showFlags & HIST_TIMETREE)
 	//				ShowWindow(GetDlgItem(m_hwnd, IDC_TIMETREE), SW_SHOW);
-	//			ShowWindow(GetDlgItem(m_hwnd, IDC_ITEMS2), SW_SHOW);
+	//			ShowWindow(GetDlgItem(m_hwnd, IDC_HISTORYCONTROL), SW_SHOW);
 	//			ShowWindow(GetDlgItem(m_hwnd, IDC_SEARCHICON), SW_SHOW);
 };
 

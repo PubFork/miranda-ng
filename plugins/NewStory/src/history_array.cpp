@@ -1,5 +1,10 @@
 #include "stdafx.h"
 
+extern HANDLE htuLog;
+
+/////////////////////////////////////////////////////////////////////////////////////////
+// Filters
+
 bool Filter::check(ItemData *item)
 {
 	if (!item) return false;
@@ -32,80 +37,75 @@ bool Filter::check(ItemData *item)
 	}
 
 	if (flags & (EVENTTEXT | EVENTONLY)) {
-		item->loadInline(ItemData::ELM_DATA);
+		item->load(true);
 		return CheckFilter(item->getWBuf(), text);
 	}
 	return true;
 };
 
+/////////////////////////////////////////////////////////////////////////////////////////
 // Event
-bool ItemData::load(EventLoadMode mode)
+
+void ItemData::checkCreate(HWND hwnd)
 {
-	if (mode == ItemData::ELM_NOTHING)
-		return true;
-
-	if ((mode == ItemData::ELM_INFO) && !dbeOk) {
-		dbeOk = true;
-		dbe.cbBlob = 0;
-		dbe.pBlob = 0;
-		db_event_get(hEvent, &dbe);
-		return true;
+	if (data == nullptr) {
+		data = MTextCreateW(htuLog, ptrW(TplFormatString(getTemplate(), hContact, this)));
+		MTextSetParent(data, hwnd);
 	}
+}
 
-	if ((mode == ItemData::ELM_DATA) && (!dbeOk || !dbe.cbBlob)) {
-		dbeOk = true;
-		dbe.cbBlob = db_event_getBlobSize(hEvent);
-		dbe.pBlob = (PBYTE)mir_calloc(dbe.cbBlob + 1);
-		db_event_get(hEvent, &dbe);
+bool ItemData::isLink(POINT pt) const
+{
+	int cp = MTextSendMessage(0, data, EM_CHARFROMPOS, 0, LPARAM(&pt));
+	if (cp == -1)
+		return false;
+	
+	CHARRANGE cr = { cp, cp + 1 };
+	MTextSendMessage(0, data, EM_EXSETSEL, 0, LPARAM(&cr));
+	
+	CHARFORMAT2 cf = {};
+	cf.cbSize = sizeof(cf);
+	cf.dwMask = CFM_LINK;
+	DWORD res = MTextSendMessage(0, data, EM_GETCHARFORMAT, SCF_SELECTION, LPARAM(&cf));
+	return ((res & CFM_LINK) && (cf.dwEffects & CFE_LINK)) || ((res & CFM_REVISED) && (cf.dwEffects & CFE_REVISED));
+}
 
-		wtext = 0;
+void ItemData::load(bool bFullLoad)
+{
+	if (!bFullLoad || bLoaded)
+		return;
 
-		switch (dbe.eventType) {
-		case EVENTTYPE_STATUSCHANGE:
-		case EVENTTYPE_MESSAGE:
-			wtext = mir_utf8decodeW((char*)dbe.pBlob);
-			wtext_del = false;
-			break;
+	dbe.cbBlob = db_event_getBlobSize(hEvent);
+	dbe.pBlob = (PBYTE)mir_calloc(dbe.cbBlob + 1);
+	if (db_event_get(hEvent, &dbe))
+		return;
 
-		case EVENTTYPE_JABBER_PRESENCE:
-			wtext = DbEvent_GetTextW(&dbe, CP_ACP);
-			wtext_del = false;
-			break;
+	bLoaded = true;
 
-		case EVENTTYPE_AUTHREQUEST:
-			wtext = new wchar_t[512];
-			wtext_del = true;
-			if ((dbe.cbBlob > 8) && *(dbe.pBlob + 8)) {
-				mir_snwprintf(wtext, 512, L"%s requested authorization", Utf2T((char*)dbe.pBlob + 8).get());
-			}
-			else {
-				mir_snwprintf(wtext, 512, L"%d requested authorization", *(DWORD *)(dbe.pBlob));
-			}
-			break;
-
-		case EVENTTYPE_ADDED:
-			wtext = new wchar_t[512];
-			wtext_del = true;
-			if ((dbe.cbBlob > 8) && *(dbe.pBlob + 8)) {
-				mir_snwprintf(wtext, 512, L"%s added you to the contact list", Utf2T((char *)dbe.pBlob + 8).get());
-			}
-			else {
-				mir_snwprintf(wtext, 512, L"%d added you to the contact list", *(DWORD *)(dbe.pBlob));
-			}
-			break;
+	switch (dbe.eventType) {
+	case EVENTTYPE_MESSAGE:
+		if (!(dbe.flags & DBEF_SENT)) {
+			if (!dbe.markedRead())
+				db_event_markRead(hContact, hEvent);
+			g_clistApi.pfnRemoveEvent(hContact, hEvent);
 		}
+		__fallthrough;
 
-		return true;
+	case EVENTTYPE_STATUSCHANGE:
+		wtext = mir_utf8decodeW((char *)dbe.pBlob);
+		break;
+
+	default:
+		wtext = DbEvent_GetTextW(&dbe, CP_ACP);
+		break;
 	}
-
-	return false;
 }
 
 bool ItemData::isGrouped() const
 {
 	if (pPrev && g_plugin.bMsgGrouping) {
-		if (!pPrev->dbeOk)
-			pPrev->load(EventLoadMode::ELM_DATA);
+		if (!pPrev->bLoaded)
+			pPrev->load(true);
 
 		if (pPrev->hContact == hContact && (pPrev->dbe.flags & DBEF_SENT) == (dbe.flags & DBEF_SENT))
 			return true;
@@ -115,12 +115,79 @@ bool ItemData::isGrouped() const
 
 ItemData::~ItemData()
 {
-	if (dbeOk && dbe.pBlob) {
+	if (bLoaded)
 		mir_free(dbe.pBlob);
-		dbe.pBlob = 0;
+	mir_free(wtext);
+	if (data)
+		MTextDestroy(data);
+}
+
+int ItemData::getTemplate() const
+{
+	switch (dbe.eventType) {
+	case EVENTTYPE_MESSAGE:         return isGrouped() ? TPL_MSG_GRP : TPL_MESSAGE;
+	case EVENTTYPE_FILE:            return TPL_FILE;
+	case EVENTTYPE_STATUSCHANGE:    return TPL_SIGN;
+	case EVENTTYPE_AUTHREQUEST:     return TPL_AUTH;
+	case EVENTTYPE_ADDED:           return TPL_ADDED;
+	case EVENTTYPE_JABBER_PRESENCE: return TPL_PRESENCE;
+	default:
+		return TPL_OTHER;
 	}
-	if (wtext && wtext_del) delete[] wtext;
-	if (data) MTextDestroy(data);
+}
+
+int ItemData::getCopyTemplate() const
+{
+	switch (dbe.eventType) {
+	case EVENTTYPE_MESSAGE:         return TPL_COPY_MESSAGE;
+	case EVENTTYPE_FILE:            return TPL_COPY_FILE;
+	case EVENTTYPE_STATUSCHANGE:    return TPL_COPY_SIGN;
+	case EVENTTYPE_AUTHREQUEST:     return TPL_COPY_AUTH;
+	case EVENTTYPE_ADDED:           return TPL_COPY_ADDED;
+	case EVENTTYPE_JABBER_PRESENCE: return TPL_COPY_PRESENCE;
+	default:
+		return TPL_COPY_OTHER;
+	}
+}
+
+void ItemData::getFontColor(int &fontId, int &colorId) const
+{
+	switch (dbe.eventType) {
+	case EVENTTYPE_MESSAGE:
+		fontId = !(dbe.flags & DBEF_SENT) ? FONT_INMSG : FONT_OUTMSG;
+		colorId = !(dbe.flags & DBEF_SENT) ? COLOR_INMSG : COLOR_OUTMSG;
+		break;
+
+	case EVENTTYPE_FILE:
+		fontId = !(dbe.flags & DBEF_SENT) ? FONT_INFILE : FONT_OUTFILE;
+		colorId = !(dbe.flags & DBEF_SENT) ? COLOR_INFILE : COLOR_OUTFILE;
+		break;
+
+	case EVENTTYPE_STATUSCHANGE:
+		fontId = FONT_STATUS;
+		colorId = COLOR_STATUS;
+		break;
+
+	case EVENTTYPE_AUTHREQUEST:
+		fontId = FONT_INOTHER;
+		colorId = COLOR_INOTHER;
+		break;
+
+	case EVENTTYPE_ADDED:
+		fontId = FONT_INOTHER;
+		colorId = COLOR_INOTHER;
+		break;
+
+	case EVENTTYPE_JABBER_PRESENCE:
+		fontId = !(dbe.flags & DBEF_SENT) ? FONT_INOTHER : FONT_OUTOTHER;
+		colorId = !(dbe.flags & DBEF_SENT) ? COLOR_INOTHER : COLOR_OUTOTHER;
+		break;
+
+	default:
+		fontId = !(dbe.flags & DBEF_SENT) ? FONT_INOTHER : FONT_OUTOTHER;
+		colorId = !(dbe.flags & DBEF_SENT) ? COLOR_INOTHER : COLOR_OUTOTHER;
+		break;
+	}
 }
 
 // Array
@@ -128,7 +195,6 @@ HistoryArray::HistoryArray() :
 	pages(50),
 	strings(50, wcscmp)
 {
-	pages.insert(new ItemBlock());
 }
 
 HistoryArray::~HistoryArray()
@@ -162,9 +228,7 @@ void HistoryArray::addChatEvent(SESSION_INFO *si, LOGINFO *lin)
 	auto &p = allocateItem();
 	p.hContact = si->hContact;
 	p.wtext = wszText.Detach();
-	p.dbeOk = true;
-	p.dbe.cbBlob = 1;
-	p.dbe.pBlob = (BYTE *)p.wtext;
+	p.bLoaded = true;
 	p.dbe.eventType = EVENTTYPE_MESSAGE;
 	p.dbe.timestamp = lin->time;
 
@@ -203,42 +267,27 @@ ItemData& HistoryArray::allocateItem()
 		pages.insert(new ItemBlock());
 		iLastPageCounter = 0;
 	}
+	else if (pages.getCount() == 0)
+		pages.insert(new ItemBlock);
 
 	auto &p = pages[pages.getCount() - 1];
 	return p.data[iLastPageCounter++];
 }
 
-/*
-bool HistoryArray::preloadEvents(int count)
-{
-	for (int i = 0; i < count; ++i)
-	{
-		preBlock->items[preIndex].load(ItemData::ELM_DATA);
-		if (++preIndex == preBlock->count)
-		{
-			preBlock = preBlock->next;
-			if (!preBlock)
-				return false;
-			preIndex = 0;
-		}
-	}
-	return true;
-}
-*/
-
-ItemData* HistoryArray::get(int id, ItemData::EventLoadMode mode)
+ItemData* HistoryArray::get(int id, bool bLoad)
 {
 	int pageNo = id / HIST_BLOCK_SIZE;
 	if (pageNo >= pages.getCount())
 		return nullptr;
 
 	auto *p = &pages[pageNo].data[id % HIST_BLOCK_SIZE];
-	if (mode != ItemData::ELM_NOTHING)
-		p->load(mode);
+	if (bLoad && !p->bLoaded)
+		p->load(true);
 	return p;
 }
 
 int HistoryArray::getCount() const
 {
-	return (pages.getCount() - 1) * HIST_BLOCK_SIZE + iLastPageCounter;
+	int nPages = pages.getCount();
+	return (nPages == 0) ? 0 : (nPages - 1) * HIST_BLOCK_SIZE + iLastPageCounter;
 }

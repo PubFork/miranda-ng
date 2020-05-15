@@ -2,36 +2,40 @@
 
 MyColourID g_colorTable[COLOR_COUNT] =
 {
-	{ "Incoming messages",     "ColorMsgIn",   RGB(0xd6, 0xf5, 0xc0) },
-	{ "Outgoing messages",     "ColorMsgOut",  RGB(0xf5, 0xe7, 0xd8) },
+	{ LPGEN("Incoming messages"),          "ColorMsgIn",   RGB(0xd6, 0xf5, 0xc0) },
+	{ LPGEN("Outgoing messages"),          "ColorMsgOut",  RGB(0xf5, 0xe7, 0xd8) },
 
-	{ "Incoming files",        "ColorFileIn",  RGB(0xe3, 0xee, 0x9b) },
-	{ "Outgoing files",        "ColorFileOut", RGB(0xe3, 0xee, 0x9b) },
+	{ LPGEN("Incoming files"),             "ColorFileIn",  RGB(0xe3, 0xee, 0x9b) },
+	{ LPGEN("Outgoing files"),             "ColorFileOut", RGB(0xe3, 0xee, 0x9b) },
 
-	{ "Status changes",        "ColorStatus",  RGB(0xf0, 0xf0, 0xf0) },
+	{ LPGEN("Status changes"),             "ColorStatus",  RGB(0xf0, 0xf0, 0xf0) },
 
-	{ "Other incoming events", "ColorIn",      RGB(0xff, 0xff, 0xff) },
-	{ "Other outgoing events", "ColorOut",     RGB(0xff, 0xff, 0xff) },
+	{ LPGEN("Other incoming events"),      "ColorIn",      RGB(0xff, 0xff, 0xff) },
+	{ LPGEN("Other outgoing events"),      "ColorOut",     RGB(0xff, 0xff, 0xff) },
 
-	{ "Selected items",        "ColorSel",     RGB(0x60, 0x60, 0x60) },
-	{ "Selected items (text)", "ColorSelTxt",  RGB(0xff, 0xff, 0xff) }
+	{ LPGEN("Selected item's text"),       "ColorSelTxt",  RGB(0xff, 0xff, 0xff) },
+	{ LPGEN("Selected item's background"), "ColorSel",     GetSysColor(COLOR_HIGHLIGHT) },
+	{ LPGEN("Selected item's frame"),      "ColorSelFrm",  GetSysColor(COLOR_HIGHLIGHTTEXT) },
+
+	{ LPGEN("Grid background"),            "Background",   RGB(0xff, 0xff, 0xff) },
+	{ LPGEN("Separator"),                  "Separator",    RGB(0x60, 0x60, 0x60) },
 };
 
 MyFontID g_fontTable[FONT_COUNT] =
 {
-	{ "Incoming nick",         "FontNickIn",   RGB(0xc8, 0x3f, 0x6b) },
-	{ "Outgoing nick",         "FontNickOut",  RGB(0x08, 0x60, 0xbd) },
+	{ LPGEN("Incoming name"),         "FontNickIn",   RGB(0xc8, 0x3f, 0x6b) },
+	{ LPGEN("Outgoing name"),         "FontNickOut",  RGB(0x08, 0x60, 0xbd) },
 
-	{ "Incoming messages",     "FontMsgIn"   },
-	{ "Outgoing messages",     "FontMsgOut"  },
+	{ LPGEN("Incoming messages"),     "FontMsgIn"   },
+	{ LPGEN("Outgoing messages"),     "FontMsgOut"  },
 
-	{ "Incoming files",        "FontFileIn"  },
-	{ "Outgoing files",        "FontFileOut" },
+	{ LPGEN("Incoming files"),        "FontFileIn"  },
+	{ LPGEN("Outgoing files"),        "FontFileOut" },
 
-	{ "Status changes",        "FontStatus"  },
+	{ LPGEN("Status changes"),        "FontStatus"  },
 
-	{ "Other incoming events", "FontIn"      },
-	{ "Other outgoing events", "FontOut"     }
+	{ LPGEN("Other incoming events"), "FontIn"      },
+	{ LPGEN("Other outgoing events"), "FontOut"     }
 };
 
 int evtFontsChanged(WPARAM, LPARAM)

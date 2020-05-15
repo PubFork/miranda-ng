@@ -1571,14 +1571,22 @@ void CJabberProto::OnProcessPresence(const TiXmlElement *node, ThreadData *info)
 			else if (!mir_strcmp(show, "chat")) status = ID_STATUS_FREECHAT;
 		}
 
+		int idleTime = 0;
+		if (auto *idle = XmlGetChildByTag(node, "idle", "xmlns", JABBER_FEAT_IDLE))
+			if (auto *szSince = XmlGetAttr(idle, "since"))
+				idleTime = str2time(szSince);
+
 		int priority = XmlGetChildInt(node, "priority");
 		const char *pszStatus = XmlGetChildText(node, "status");
 		ListAddResource(LIST_ROSTER, from, status, pszStatus, priority);
 
 		// XEP-0115: Entity Capabilities
 		pResourceStatus r(ResourceInfoFromJID(from));
-		if (r != nullptr)
+		if (r != nullptr) {
+			if (idleTime)
+				r->m_dwIdleStartTime = idleTime;
 			OnProcessPresenceCapabilites(node, r);
+		}
 
 		UpdateJidDbSettings(from);
 
@@ -1913,15 +1921,6 @@ void CJabberProto::OnProcessRegIq(const TiXmlElement *node, ThreadData *info)
 		info->reg_done = true;
 		info->send("</stream:stream>");
 	}
-}
-
-/////////////////////////////////////////////////////////////////////////////////////////
-// Carbons -- this might need to go into its own module
-
-void CJabberProto::EnableCarbons(bool bEnable)
-{
-	m_ThreadInfo->send(XmlNodeIq("set", SerialNext())
-		<< XCHILDNS((bEnable) ? "enable" : "disable", JABBER_FEAT_CARBONS));
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
